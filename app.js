@@ -962,7 +962,7 @@ let aspectToken = 0;
 
 function setStageHTML(html, externalUrl = "#", options = {}) {
   stage.innerHTML = html;
-  stage.classList.remove("stage-portrait", "stage-wide", "stage-facebook", "stage-youtube", "stage-drive");
+  stage.classList.remove("stage-portrait", "stage-wide", "stage-facebook", "stage-youtube", "stage-drive", "is-loading");
   if (options.className) stage.classList.add(...String(options.className).split(/\s+/).filter(Boolean));
   stage.style.setProperty("--stage-aspect", options.aspect || "16 / 9");
   stage.style.setProperty("--stage-max-width", options.maxWidth || "100%");
@@ -1124,9 +1124,60 @@ function fitStage() {
 function renderVideo(id, label) {
   const url = getMediaUrl(id);
   stage.innerHTML =
-    `<video class="stage-video" controls playsinline preload="metadata" ` +
+    `<video class="stage-video" controls playsinline preload="auto" ` +
     `poster="${url}#t=0.1" title="${escapeHTML(label)}" style="background:#000">` +
-    `<source src="${url}" type="video/mp4" /></video>`;
+    `<source src="${url}" type="video/mp4" /></video>` +
+    `<div class="stage-loader">
+      <div class="loader-core">
+        <div class="loader-ring"></div>
+        <div class="loader-ring"></div>
+        <div class="loader-ring"></div>
+      </div>
+      <div class="loader-text">Loading magic, please wait<br>the video will be ready soon</div>
+      <button type="button" class="loader-btn interactive">Play Now</button>
+    </div>`;
+    
+  const vid = stage.querySelector("video");
+  const btn = stage.querySelector(".loader-btn");
+  
+  if (vid) {
+    let loadTimer = null;
+    let forcePlay = false;
+
+    const hideLoader = () => {
+      forcePlay = true;
+      clearTimeout(loadTimer);
+      stage.classList.remove("is-loading");
+    };
+
+    vid.addEventListener("waiting", () => {
+      if (forcePlay) return;
+      stage.classList.add("is-loading");
+      clearTimeout(loadTimer);
+      loadTimer = setTimeout(hideLoader, 10000);
+    });
+
+    vid.addEventListener("progress", () => {
+      if (forcePlay || !vid.duration || !stage.classList.contains("is-loading")) return;
+      if (vid.buffered.length > 0) {
+        const bufferedEnd = vid.buffered.end(vid.buffered.length - 1);
+        if (bufferedEnd / vid.duration > 0.5) hideLoader();
+      }
+    });
+
+    vid.addEventListener("playing", hideLoader);
+    
+    if (btn) btn.addEventListener("click", () => {
+      hideLoader();
+      vid.play().catch(() => {});
+    });
+    
+    stage.classList.add("is-loading");
+    const playPromise = vid.play();
+    if (playPromise !== undefined) {
+      playPromise.catch(hideLoader);
+    }
+  }
   fitStage();
 }
 
@@ -1134,7 +1185,24 @@ function renderImage(id, label) {
   const url = getMediaUrl(id);
   stage.innerHTML =
     `<img class="stage-photo" src="${url}" alt="${escapeHTML(label)}" ` +
-    `loading="lazy" decoding="async" />`;
+    `loading="lazy" decoding="async" />` +
+    `<div class="stage-loader">
+      <div class="loader-core">
+        <div class="loader-ring"></div><div class="loader-ring"></div><div class="loader-ring"></div>
+      </div>
+      <div class="loader-text">Loading magic...</div>
+    </div>`;
+    
+  const img = stage.querySelector("img");
+  if (img) {
+    if (img.complete) {
+      stage.classList.remove("is-loading");
+    } else {
+      stage.classList.add("is-loading");
+      img.addEventListener("load", () => stage.classList.remove("is-loading"));
+      img.addEventListener("error", () => stage.classList.remove("is-loading"));
+    }
+  }
   fitStage();
 }
 

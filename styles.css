@@ -4712,3 +4712,119 @@ html[data-theme="light"] .proxi-banner-text p {
     padding: 4rem;
   }
 }
+
+/* --- Loading Magic Buffer --- */
+.stage-loader {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 8, 8, 0.85);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.4s ease, visibility 0.4s ease;
+  z-index: 10;
+  /* Allow clicks only when visible so users can click the Play Now button */
+  pointer-events: none; 
+}
+
+.stage.is-loading .stage-loader {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.loader-core {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  margin-bottom: 24px;
+}
+
+.loader-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+}
+
+.loader-ring:nth-child(1) {
+  border-top-color: #ff6a00;
+  border-bottom-color: #ff6a00;
+  animation: spinRing 2s ease-in-out infinite;
+}
+
+.loader-ring:nth-child(2) {
+  inset: 10px;
+  border-left-color: rgba(255, 255, 255, 0.8);
+  border-right-color: rgba(255, 255, 255, 0.8);
+  animation: spinRingReverse 1.5s linear infinite;
+}
+
+.loader-ring:nth-child(3) {
+  inset: 20px;
+  background: #ff6a00;
+  box-shadow: 0 0 20px #ff6a00;
+  animation: pulseCore 2s ease-in-out infinite alternate;
+}
+
+.loader-text {
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  margin-bottom: 20px;
+  animation: pulseText 2s ease-in-out infinite alternate;
+  text-align: center;
+}
+
+.loader-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  opacity: 0;
+  transform: translateY(10px);
+  animation: fadeUpBtn 0.5s ease forwards;
+  animation-delay: 2s; /* Give it 2 seconds before showing the button */
+}
+
+.loader-btn:hover {
+  background: rgba(255, 106, 0, 0.2);
+  border-color: #ff6a00;
+  color: #ff6a00;
+}
+
+@keyframes spinRing {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes spinRingReverse {
+  0% { transform: rotate(360deg); }
+  100% { transform: rotate(0deg); }
+}
+
+@keyframes pulseCore {
+  0% { transform: scale(0.8); opacity: 0.5; }
+  100% { transform: scale(1.1); opacity: 1; }
+}
+
+@keyframes pulseText {
+  0% { opacity: 0.6; }
+  100% { opacity: 1; }
+}
+
+@keyframes fadeUpBtn {
+  to { opacity: 1; transform: translateY(0); }
+}

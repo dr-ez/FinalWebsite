@@ -1123,6 +1123,14 @@ function fitStage() {
 // Native HTML5 video player — browser-native controls.
 function renderVideo(id, label) {
   const url = getMediaUrl(id);
+  const name = driveFileName(id) || "";
+  
+  // Custom wait times based on video weight (unoptimized MP4s need more buffer time)
+  let waitTime = 8000; // 8 seconds default
+  if (name.includes("Color grading sample")) {
+    waitTime = 15000; // 15 seconds for the heaviest file
+  }
+
   stage.innerHTML =
     `<video class="stage-video" controls playsinline preload="auto" ` +
     `poster="${url}#t=0.1" title="${escapeHTML(label)}" style="background:#000">` +
@@ -1154,16 +1162,12 @@ function renderVideo(id, label) {
       if (forcePlay) return;
       stage.classList.add("is-loading");
       clearTimeout(loadTimer);
-      loadTimer = setTimeout(hideLoader, 10000);
+      // Enforce the strict buffer time
+      loadTimer = setTimeout(hideLoader, waitTime);
     });
 
-    vid.addEventListener("progress", () => {
-      if (forcePlay || !vid.duration || !stage.classList.contains("is-loading")) return;
-      if (vid.buffered.length > 0) {
-        const bufferedEnd = vid.buffered.end(vid.buffered.length - 1);
-        if (bufferedEnd / vid.duration > 0.5) hideLoader();
-      }
-    });
+    // The progress event is unreliable for non-web-optimized MP4s (duration is often unknown),
+    // so we rely entirely on the strict waitTime and the manual Play Now button.
 
     vid.addEventListener("playing", hideLoader);
     

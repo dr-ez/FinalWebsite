@@ -29,9 +29,9 @@ const PROJECTS = [
   },
   {
     index: 2, category: 'editing',
-    title: 'Land of Heroes — Mobile Game Ad',
+    title: 'Land of the Brave — Mobile Game Ad',
     cat: 'Video Editing · Color Grading',
-    desc: 'Full production editing for Tamatem\'s Land of Heroes mobile game campaign. Cinematic color grade, multi-layer timeline, audio mix, and final delivery. The project featured in this portfolio\'s cinematic intro.',
+    desc: 'Full production editing for Tamatem\'s Land of the Brave mobile game campaign. Cinematic color grade, multi-layer timeline, audio mix, and final delivery. The project featured in this portfolio\'s cinematic intro.',
     tags: ['Premiere Pro', 'After Effects', 'Color Grade', 'Mobile Game', 'Tamatem', 'FINAL_GRADE_v7'],
     img: 'assets/project-tamatem-heroes-land-ad.jpg',
     link: null
@@ -203,6 +203,19 @@ let steamParticles = [];
 let deskLightBulb;
 let pcRigLight;
 
+// Interactive clickable objects & their click-state
+let mugGroup, mugLiquid, lampGroup, bulbGlow;
+let speakerL, speakerR, mouseGroup, pcGroup;
+let mugState  = { clicks: 0, broken: false };
+let lampState = { clicks: 0, broken: false, flickering: false };
+let lampFlickerInterval = null;
+// Notebook (interactive ink) + RGB accents
+let notepadMesh, notepadCanvas, notepadCtx, notepadTexture;
+let todoCanvas, todoCtx, todoTexture;
+let notepadLast = null;
+let fanRings = [];
+let speakerRings = [];
+
 // Dynamic Screen Canvases & Textures
 let canvasLeft, ctxLeft, textureLeft;
 let canvasCenter, ctxCenter, textureCenter;
@@ -211,6 +224,7 @@ let canvasRight, ctxRight, textureRight;
 // Parallax parameters
 let mouseParallaxX = 0, mouseParallaxY = 0;
 let tiltParallaxX = 0, tiltParallaxY = 0;
+let tiltTargetX = 0, tiltTargetY = 0;
 let isMobileDevice = false;
 let scrollProgressPct = 0;
 
@@ -408,7 +422,7 @@ function drawCenterScreen(progress) {
   ctxCenter.fillStyle = '#8e8e8e';
   ctxCenter.font = '11px sans-serif';
   ctxCenter.fillText("File  Edit  Clip  Sequence  Markers  Graphics  Window  Help", 20, 19);
-  ctxCenter.fillText("Premiere Pro 2026 - Project: Land of Heroes", 380, 19);
+  ctxCenter.fillText("Premiere Pro 2026 - Project: Land of the Brave", 380, 19);
 
   // Left sidebar project bin
   ctxCenter.fillStyle = '#252525';
@@ -417,11 +431,11 @@ function drawCenterScreen(progress) {
   ctxCenter.strokeRect(10, 40, 280, 310);
   ctxCenter.fillStyle = '#8e8e8e';
   ctxCenter.font = '10px sans-serif';
-  ctxCenter.fillText("Project: Land of Heroes", 20, 56);
+  ctxCenter.fillText("Project: Land of the Brave", 20, 56);
   ctxCenter.fillStyle = 'rgba(255, 140, 0, 0.15)';
   ctxCenter.fillRect(20, 70, 16, 12); // folder icon
   ctxCenter.fillStyle = '#bbb';
-  ctxCenter.fillText("Land_Of_Heroes_Footage", 44, 80);
+  ctxCenter.fillText("Land_Of_The_Brave_Footage", 44, 80);
 
   // Preview monitor (Program Monitor)
   ctxCenter.fillStyle = '#0d0d0d';
@@ -685,6 +699,210 @@ function spawn3DRipple(point) {
   });
 }
 
+// Procedural image-based-lighting environment (warm studio room) → real reflections
+function buildEnvironment(rndr) {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 256;
+  const ctx = c.getContext('2d');
+  const g = ctx.createLinearGradient(0, 0, 0, 256);
+  g.addColorStop(0, '#2a2622');     // ceiling, warm dark
+  g.addColorStop(0.46, '#3a332b');
+  g.addColorStop(0.5, '#241d16');   // horizon
+  g.addColorStop(1, '#0e0b08');     // floor
+  ctx.fillStyle = g; ctx.fillRect(0, 0, 512, 256);
+  // warm key softbox (upper-left)
+  let rg = ctx.createRadialGradient(150, 66, 8, 150, 66, 185);
+  rg.addColorStop(0, 'rgba(255,224,178,0.92)');
+  rg.addColorStop(1, 'rgba(255,224,178,0)');
+  ctx.fillStyle = rg; ctx.fillRect(0, 0, 512, 256);
+  // cool screen fill (right)
+  rg = ctx.createRadialGradient(384, 108, 8, 384, 108, 150);
+  rg.addColorStop(0, 'rgba(120,160,220,0.35)');
+  rg.addColorStop(1, 'rgba(120,160,220,0)');
+  ctx.fillStyle = rg; ctx.fillRect(0, 0, 512, 256);
+  // cyan rgb spill (low)
+  rg = ctx.createRadialGradient(300, 205, 5, 300, 205, 120);
+  rg.addColorStop(0, 'rgba(0,200,255,0.16)');
+  rg.addColorStop(1, 'rgba(0,200,255,0)');
+  ctx.fillStyle = rg; ctx.fillRect(0, 0, 512, 256);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  const pmrem = new THREE.PMREMGenerator(rndr);
+  const rt = pmrem.fromEquirectangular(tex);
+  tex.dispose();
+  pmrem.dispose();
+  return rt.texture;
+}
+
+// Warm textured plaster wall (procedural, inspired by the reference photo)
+function makeWallTexture() {
+  const c = document.createElement('canvas');
+  c.width = 1024; c.height = 576;
+  const ctx = c.getContext('2d');
+
+  // base warm vertical gradient
+  const base = ctx.createLinearGradient(0, 0, 0, 576);
+  base.addColorStop(0, '#241a12');
+  base.addColorStop(0.5, '#2f2218');
+  base.addColorStop(1, '#1b130c');
+  ctx.fillStyle = base;
+  ctx.fillRect(0, 0, 1024, 576);
+
+  // warm light pool from the upper-left (where the lamp sits)
+  const glow = ctx.createRadialGradient(300, 200, 30, 300, 200, 640);
+  glow.addColorStop(0, 'rgba(156, 108, 60, 0.85)');
+  glow.addColorStop(0.4, 'rgba(98, 68, 40, 0.42)');
+  glow.addColorStop(1, 'rgba(40, 28, 18, 0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, 1024, 576);
+
+  // fine plaster grain
+  for (let i = 0; i < 26000; i++) {
+    const x = Math.random() * 1024, y = Math.random() * 576;
+    const a = Math.random() * 0.06;
+    ctx.fillStyle = Math.random() > 0.5 ? `rgba(255,235,205,${a})` : `rgba(0,0,0,${a})`;
+    ctx.fillRect(x, y, 1.4, 1.4);
+  }
+
+  // large-scale mottling
+  for (let i = 0; i < 60; i++) {
+    const x = Math.random() * 1024, y = Math.random() * 576;
+    const r = 40 + Math.random() * 130;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, Math.random() > 0.5 ? 'rgba(0,0,0,0.05)' : 'rgba(120,90,60,0.05)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // edge vignette
+  const vig = ctx.createRadialGradient(512, 288, 200, 512, 288, 740);
+  vig.addColorStop(0, 'rgba(0,0,0,0)');
+  vig.addColorStop(1, 'rgba(0,0,0,0.62)');
+  ctx.fillStyle = vig;
+  ctx.fillRect(0, 0, 1024, 576);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// Notepad to-do list (drawn to a canvas texture)
+const NOTEPAD_TODO = [
+  'Organize and analyze media',
+  'Pick main music track',
+  'Create first cut',
+  'Sync with music',
+  'Add VFX',
+  'Add motion graphics',
+  'Add SFX',
+  'Revise',
+  'Finalize'
+];
+
+function paperFill(ctx, W, H) {
+  const paper = ctx.createLinearGradient(0, 0, 0, H);
+  paper.addColorStop(0, '#fcf8ee');
+  paper.addColorStop(1, '#f2e9d4');
+  ctx.fillStyle = paper;
+  ctx.fillRect(0, 0, W, H);
+  for (let i = 0; i < 1500; i++) {
+    ctx.fillStyle = `rgba(120,100,70,${Math.random() * 0.03})`;
+    ctx.fillRect(Math.random() * W, Math.random() * H, 1, 1);
+  }
+}
+
+// Left page — the to-do list
+function drawTodoPage() {
+  const ctx = todoCtx, W = todoCanvas.width, H = todoCanvas.height;
+  paperFill(ctx, W, H);
+  ctx.fillStyle = '#2a2a2a';
+  ctx.font = 'bold 30px "Space Mono", monospace';
+  ctx.fillText('TO-DO', 26, 48);
+  ctx.fillStyle = '#a07c34';
+  ctx.font = '13px "Space Mono", monospace';
+  ctx.fillText('EDIT PIPELINE', 150, 46);
+  ctx.strokeStyle = 'rgba(200,70,60,0.5)';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(48, 70); ctx.lineTo(48, H - 16); ctx.stroke();
+  const top = 96, step = 44;
+  ctx.textBaseline = 'middle';
+  for (let i = 0; i < NOTEPAD_TODO.length; i++) {
+    const y = top + i * step;
+    ctx.strokeStyle = 'rgba(70,110,160,0.28)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.moveTo(16, y + 15); ctx.lineTo(W - 16, y + 15); ctx.stroke();
+    ctx.strokeStyle = '#555';
+    ctx.lineWidth = 1.8;
+    ctx.strokeRect(60, y - 9, 18, 18);
+    ctx.fillStyle = '#33312c';
+    ctx.font = '18px "Outfit", sans-serif';
+    ctx.fillText(NOTEPAD_TODO[i], 90, y);
+  }
+  ctx.textBaseline = 'alphabetic';
+  todoTexture.needsUpdate = true;
+}
+
+// Right page — blank, drawable
+function drawNotepadBase() {
+  const ctx = notepadCtx, W = notepadCanvas.width, H = notepadCanvas.height;
+  paperFill(ctx, W, H);
+  ctx.strokeStyle = 'rgba(70,110,160,0.16)';
+  ctx.lineWidth = 1;
+  for (let y = 70; y < H - 18; y += 40) {
+    ctx.beginPath(); ctx.moveTo(16, y); ctx.lineTo(W - 16, y); ctx.stroke();
+  }
+  ctx.fillStyle = 'rgba(120,100,70,0.4)';
+  ctx.font = 'italic 14px "Outfit", sans-serif';
+  ctx.fillText('notes — tap to write', 22, 40);
+  notepadTexture.needsUpdate = true;
+}
+
+// Black glossy ink stroke from a raycast UV hit on the right page
+function drawNotepadPencil(uv) {
+  if (!notepadCtx || !uv) return;
+  const x = uv.x * notepadCanvas.width;
+  const y = (1 - uv.y) * notepadCanvas.height;
+  const ctx = notepadCtx;
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  const now = Date.now();
+  if (notepadLast && now - notepadLast.t < 1400) {
+    ctx.strokeStyle = 'rgba(8,10,20,0.94)';
+    ctx.lineWidth = 3.0;
+    ctx.beginPath(); ctx.moveTo(notepadLast.x, notepadLast.y); ctx.lineTo(x, y); ctx.stroke();
+    // wet-ink highlight (fake specular)
+    ctx.strokeStyle = 'rgba(150,170,210,0.32)';
+    ctx.lineWidth = 1.0;
+    ctx.beginPath(); ctx.moveTo(notepadLast.x - 0.8, notepadLast.y - 0.8); ctx.lineTo(x - 0.8, y - 0.8); ctx.stroke();
+  } else {
+    ctx.fillStyle = 'rgba(8,10,20,0.94)';
+    ctx.beginPath(); ctx.arc(x, y, 2.0, 0, Math.PI * 2); ctx.fill();
+  }
+  notepadLast = { x, y, t: now };
+  notepadTexture.needsUpdate = true;
+}
+
+// Build a cylinder spanning two points (for lamp arms, cables, etc.)
+function cylinderBetween(a, b, radius, mat) {
+  const dir = new THREE.Vector3().subVectors(b, a);
+  const len = dir.length();
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, len, 16), mat);
+  mesh.position.copy(a).add(b).multiplyScalar(0.5);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+  mesh.castShadow = true;
+  return mesh;
+}
+
+// RGB ring around a front fan; pushes its emissive colour for cycling
+function addFanRing(fanGroup) {
+  const mat = new THREE.MeshStandardMaterial({ color: 0x00b0ff, emissive: 0x00b0ff, emissiveIntensity: 1.6, roughness: 0.4 });
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.118, 0.013, 8, 32), mat);
+  ring.rotation.x = Math.PI / 2; // sit in the fan's rim plane
+  fanGroup.add(ring);
+  fanRings.push(mat.emissive);
+}
+
 // Setup the entire Three.js scene
 function initThree() {
   initScreenCanvases();
@@ -692,22 +910,44 @@ function initThree() {
   const width  = filmCanvas.clientWidth;
   const height = filmCanvas.clientHeight;
 
-  renderer = new THREE.WebGLRenderer({ canvas: filmCanvas, antialias: true, alpha: true });
+  renderer = new THREE.WebGLRenderer({ canvas: filmCanvas, antialias: true, alpha: false });
   renderer.setSize(width, height, false);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.15;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.physicallyCorrectLights = true;
 
   scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x140f0b);          // warm dark room
+  scene.fog = new THREE.FogExp2(0x140f0b, 0.045);
+  scene.environment = buildEnvironment(renderer);        // image-based reflections
 
-  camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
+  // Warm textured plaster wall behind the desk
+  const wallMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(46, 26),
+    new THREE.MeshBasicMaterial({ map: makeWallTexture() })
+  );
+  wallMesh.position.set(-1.0, 2.4, -6.5);
+  scene.add(wallMesh);
+
+  camera = new THREE.PerspectiveCamera(42, width / height, 0.1, 100);
   camera.position.set(camState.x, camState.y, camState.z);
 
   // ── 3D OBJECTS CONSTRUCTED FROM SCRATCH ──
 
   // A. Desk
   const deskGeom = new THREE.BoxGeometry(6.4, 0.15, 3.4);
-  const deskMat  = new THREE.MeshStandardMaterial({ color: 0x18100b, roughness: 0.95, metalness: 0.0 });
+  const deskMat  = new THREE.MeshPhysicalMaterial({
+    color: 0x3a2416,            // richer warm walnut
+    roughness: 0.4,
+    metalness: 0.0,
+    clearcoat: 0.85,           // lacquered finish
+    clearcoatRoughness: 0.12,
+    reflectivity: 0.55
+  });
   deskMesh = new THREE.Mesh(deskGeom, deskMat);
   deskMesh.position.set(0, -0.9, 0);
   deskMesh.receiveShadow = true;
@@ -716,7 +956,7 @@ function initThree() {
 
   // Desk legs (cylinders)
   const legGeom = new THREE.CylinderGeometry(0.05, 0.05, 1.8);
-  const legMat  = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.8, roughness: 0.3 });
+  const legMat  = new THREE.MeshPhysicalMaterial({ color: 0x0a0a0a, metalness: 0.95, roughness: 0.15, clearcoat: 0.3 });
   const legPos = [
     [-3.0, -1.8, -1.4],
     [3.0, -1.8, -1.4],
@@ -731,8 +971,8 @@ function initThree() {
   });
 
   // B. Three-Monitor Setup
-  const frameMat = new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.4 });
-  const standMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.7, roughness: 0.2 });
+  const frameMat = new THREE.MeshPhysicalMaterial({ color: 0x0e0e0e, roughness: 0.55, metalness: 0.05, clearcoat: 0.15, clearcoatRoughness: 0.6 });
+  const standMat = new THREE.MeshPhysicalMaterial({ color: 0xb8b8b8, metalness: 0.95, roughness: 0.18, clearcoat: 0.4, clearcoatRoughness: 0.08 });
 
   // 1. Left Monitor (Landscape, Angled)
   const leftGroup = new THREE.Group();
@@ -808,46 +1048,58 @@ function initThree() {
 
   scene.add(rightGroup);
 
-  // C. Mechanical Keyboard (Refined to eliminate coplanar Z-fighting)
-  const kbBase = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.05, 0.6), standMat);
-  kbBase.position.set(0, -0.798, 0.8); // Top surface is at -0.773 (2mm vertical offset above bezel)
-  kbBase.receiveShadow = true;
-  kbBase.castShadow = true;
+  // C. Wireless mechanical keyboard — sculpted PBT keycaps, bevelled case, volume knob, RGB underglow
+  const kbCaseMat = new THREE.MeshPhysicalMaterial({ color: 0xdedde3, roughness: 0.5, metalness: 0.2, clearcoat: 0.3, clearcoatRoughness: 0.3, envMapIntensity: 0.8 });
+  const kbDeckMat = new THREE.MeshPhysicalMaterial({ color: 0x202024, roughness: 0.55, metalness: 0.4, envMapIntensity: 0.6 });
+
+  const kbBase = new THREE.Mesh(new THREE.BoxGeometry(1.62, 0.06, 0.62), kbCaseMat);
+  kbBase.position.set(0, -0.808, 0.8);
+  kbBase.receiveShadow = true; kbBase.castShadow = true;
   scene.add(kbBase);
+  const kbDeckPlate = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.02, 0.52), kbDeckMat);
+  kbDeckPlate.position.set(0, -0.778, 0.8);
+  kbDeckPlate.receiveShadow = true;
+  scene.add(kbDeckPlate);
 
-  // Bezel border frame for keyboard case
-  const kbBezel = new THREE.Mesh(new THREE.BoxGeometry(1.64, 0.07, 0.64), frameMat);
-  kbBezel.position.set(0, -0.81, 0.8); // Top surface is at -0.775
-  kbBezel.castShadow = true;
-  scene.add(kbBezel);
+  // RGB underglow strip (front edge) — cycles with the rig RGB
+  const kbGlow = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.012, 0.012), new THREE.MeshStandardMaterial({ color: 0x00b0ff, emissive: 0x00b0ff, emissiveIntensity: 1.6, roughness: 0.3 }));
+  kbGlow.position.set(0, -0.83, 1.11);
+  scene.add(kbGlow);
+  fanRings.push(kbGlow.material.emissive);
 
-  // Keyboard Keys (Rows & Columns of tiny boxes)
-  const keyMatWhite  = new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.5 });
-  const keyMatBlue   = new THREE.MeshStandardMaterial({ color: 0x90caf9, roughness: 0.5 });
-  const keyMatPurple = new THREE.MeshStandardMaterial({ color: 0xb39ddb, roughness: 0.5 });
-  const keyMatAmber  = new THREE.MeshBasicMaterial({ color: 0xff8c00 }); // Glowing Basic
+  // volume knob (top-right, metallic)
+  const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.05, 24), new THREE.MeshPhysicalMaterial({ color: 0x3a3a40, roughness: 0.35, metalness: 0.9, clearcoat: 0.4, envMapIntensity: 1.0 }));
+  knob.position.set(0.74, -0.76, 0.62);
+  knob.castShadow = true;
+  scene.add(knob);
+  const knobTop = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.004, 24), new THREE.MeshStandardMaterial({ color: 0x111114, roughness: 0.5 }));
+  knobTop.position.set(0.74, -0.733, 0.62);
+  scene.add(knobTop);
 
-  keysGroup.position.set(-0.63, -0.77, 0.62);
+  // sculpted keycaps (4-sided tapered prisms = PBT keycap shape)
+  const keyMatWhite = new THREE.MeshPhysicalMaterial({ color: 0xeceae6, roughness: 0.6, metalness: 0.0, clearcoat: 0.18, clearcoatRoughness: 0.5, envMapIntensity: 0.4 });
+  const keyMatGrey  = new THREE.MeshPhysicalMaterial({ color: 0x9a9aa2, roughness: 0.6, metalness: 0.0, clearcoat: 0.18, clearcoatRoughness: 0.5, envMapIntensity: 0.4 });
+  const keyMatDark  = new THREE.MeshPhysicalMaterial({ color: 0x35353c, roughness: 0.6, metalness: 0.0, clearcoat: 0.18, clearcoatRoughness: 0.5, envMapIntensity: 0.4 });
+  const keyMatAmber = new THREE.MeshStandardMaterial({ color: 0xff8c00, emissive: 0xff6a00, emissiveIntensity: 0.5, roughness: 0.45 });
+  const capGeo = new THREE.CylinderGeometry(0.034, 0.0424, 0.034, 4);
+
+  keysGroup.position.set(-0.63, -0.766, 0.62);
   for (let r = 0; r < 5; r++) {
     for (let c = 0; c < 15; c++) {
-      // Spacebar handling on row 4
       if (r === 4) {
         if (c === 5) {
-          const key = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.03, 0.06), keyMatWhite);
-          key.position.set(7 * 0.09, 0, r * 0.08);
-          key.castShadow = true;
-          keysGroup.add(key);
+          const sb = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.032, 0.058), keyMatWhite);
+          sb.position.set(7 * 0.09, 0, r * 0.08); sb.castShadow = true; keysGroup.add(sb);
         }
         if (c >= 5 && c <= 9) continue;
       }
-
       let mat = keyMatWhite;
       if ((c === 0 && r === 0) || c === 14 || (c === 13 && r === 4)) mat = keyMatAmber;
-      else if (c % 4 === 0) mat = keyMatBlue;
-      else if (r % 2 === 0 && c % 3 === 0) mat = keyMatPurple;
-
-      const key = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.03, 0.06), mat);
+      else if (r === 0 || c === 0) mat = keyMatDark;
+      else if ((r + c) % 5 === 0) mat = keyMatGrey;
+      const key = new THREE.Mesh(capGeo, mat);
       key.position.set(c * 0.09, 0, r * 0.08);
+      key.rotation.y = Math.PI / 4;
       key.castShadow = true;
       keysGroup.add(key);
     }
@@ -855,7 +1107,7 @@ function initThree() {
   scene.add(keysGroup);
 
   // Mouse (Refined with wheel)
-  const mouseGroup = new THREE.Group();
+  mouseGroup = new THREE.Group();
   mouseGroup.position.set(1.1, -0.825, 0.8);
   
   const mouseBody = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.05, 0.22), frameMat);
@@ -871,11 +1123,11 @@ function initThree() {
 
   // D. Small Desk Speakers (with detailed speaker cones)
   const speakerGeom = new THREE.BoxGeometry(0.24, 0.4, 0.24);
-  const speakerL = new THREE.Mesh(speakerGeom, frameMat);
+  speakerL = new THREE.Mesh(speakerGeom, frameMat);
   speakerL.position.set(-1.0, -0.62, 0.2);
   speakerL.castShadow = true;
   
-  const coneMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8 });
+  const coneMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.92, metalness: 0.05 });
   const tweeterL = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.005, 12), coneMat);
   tweeterL.position.set(0, 0.1, 0.121);
   tweeterL.rotation.x = Math.PI / 2;
@@ -885,9 +1137,14 @@ function initThree() {
   wooferL.position.set(0, -0.08, 0.121);
   wooferL.rotation.x = Math.PI / 2;
   speakerL.add(wooferL);
+
+  const spkRingL = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.008, 8, 28), new THREE.MeshStandardMaterial({ color: 0x00b0ff, emissive: 0x00b0ff, emissiveIntensity: 1.5, roughness: 0.4 }));
+  spkRingL.position.set(0, -0.08, 0.122);
+  speakerL.add(spkRingL);
+  speakerRings.push(spkRingL.material.emissive);
   scene.add(speakerL);
 
-  const speakerR = new THREE.Mesh(speakerGeom, frameMat);
+  speakerR = new THREE.Mesh(speakerGeom, frameMat);
   speakerR.position.set(1.0, -0.62, 0.2);
   speakerR.castShadow = true;
   
@@ -900,173 +1157,311 @@ function initThree() {
   wooferR.position.set(0, -0.08, 0.121);
   wooferR.rotation.x = Math.PI / 2;
   speakerR.add(wooferR);
+
+  const spkRingR = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.008, 8, 28), new THREE.MeshStandardMaterial({ color: 0x00b0ff, emissive: 0x00b0ff, emissiveIntensity: 1.5, roughness: 0.4 }));
+  spkRingR.position.set(0, -0.08, 0.122);
+  speakerR.add(spkRingR);
+  speakerRings.push(spkRingR.material.emissive);
   scene.add(speakerR);
 
-  // E. Classic Desk Lamp (Far Left, replacing volumetric tripod)
-  const lampGroup = new THREE.Group();
-  lampGroup.position.set(-2.4, -0.825, 0.4); // sits on desk surface
+  // Subtle RGB wash from each speaker
+  const spkLightL = new THREE.PointLight(0x00b0ff, 0.5, 1.1);
+  spkLightL.position.set(-1.0, -0.5, 0.45);
+  scene.add(spkLightL);
+  speakerRings.push(spkLightL.color);
 
-  const lampBase = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.02, 16), standMat);
-  lampGroup.add(lampBase);
+  const spkLightR = new THREE.PointLight(0x00b0ff, 0.5, 1.1);
+  spkLightR.position.set(1.0, -0.5, 0.45);
+  scene.add(spkLightR);
+  speakerRings.push(spkLightR.color);
 
-  const lampLower = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.5), standMat);
-  lampLower.position.set(0, 0.22, -0.05);
-  lampLower.rotation.z = Math.PI / 6;
-  lampGroup.add(lampLower);
+  // E. Articulated desk lamp (weighted base, jointed arms, conical shade)
+  lampGroup = new THREE.Group();
+  lampGroup.position.set(-2.1, -0.825, 1.15); // front-left of desk, clear of the left monitor
 
-  const lampUpper = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.55), standMat);
-  lampUpper.position.set(0.12, 0.55, 0.05);
-  lampUpper.rotation.z = -Math.PI / 8;
-  lampGroup.add(lampUpper);
+  const lampMetal = new THREE.MeshPhysicalMaterial({ color: 0x26262b, roughness: 0.38, metalness: 0.85, clearcoat: 0.3, clearcoatRoughness: 0.25, envMapIntensity: 0.9 });
+  const lampMatte = new THREE.MeshPhysicalMaterial({ color: 0x161618, roughness: 0.6, metalness: 0.4, clearcoat: 0.2, envMapIntensity: 0.5 });
+  const jointMat  = new THREE.MeshPhysicalMaterial({ color: 0x0e0e10, roughness: 0.35, metalness: 0.9, envMapIntensity: 0.8 });
 
-  const lampHead = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.14, 0.18, 16, 1, false), frameMat);
-  lampHead.position.set(0.24, 0.72, 0.05);
-  lampHead.rotation.z = -Math.PI / 3; // angle pointing down-right
+  // weighted round base
+  const baseDisc = new THREE.Mesh(new THREE.CylinderGeometry(0.135, 0.145, 0.028, 40), lampMetal);
+  baseDisc.position.set(0, 0.014, 0); baseDisc.castShadow = true; baseDisc.receiveShadow = true; lampGroup.add(baseDisc);
+  const baseRim = new THREE.Mesh(new THREE.TorusGeometry(0.135, 0.01, 12, 40), jointMat);
+  baseRim.rotation.x = Math.PI / 2; baseRim.position.set(0, 0.028, 0); lampGroup.add(baseRim);
+  const baseDome = new THREE.Mesh(new THREE.SphereGeometry(0.05, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), lampMetal);
+  baseDome.position.set(0, 0.028, 0); lampGroup.add(baseDome);
+
+  // joints + arms
+  const j0 = new THREE.Vector3(0, 0.06, 0);
+  const j1 = new THREE.Vector3(0.0, 0.43, -0.03);   // elbow
+  const j2 = new THREE.Vector3(0.22, 0.70, 0.04);   // head joint
+  [j0, j1, j2].forEach(j => { const s = new THREE.Mesh(new THREE.SphereGeometry(0.028, 16, 12), jointMat); s.position.copy(j); lampGroup.add(s); });
+  lampGroup.add(cylinderBetween(j0, j1, 0.016, lampMetal));
+  lampGroup.add(cylinderBetween(j1, j2, 0.014, lampMetal));
+
+  // spring coil hint along the lower arm
+  for (let i = 0; i < 6; i++) {
+    const p = new THREE.Vector3().lerpVectors(j0, j1, 0.15 + (i / 6) * 0.7);
+    const coil = new THREE.Mesh(new THREE.TorusGeometry(0.022, 0.004, 8, 16), jointMat);
+    coil.position.copy(p); coil.rotation.x = Math.PI / 2 - 0.2;
+    lampGroup.add(coil);
+  }
+
+  // conical shade pointing down at the notebook
+  const lampHead = new THREE.Group();
+  lampHead.position.set(0.24, 0.725, 0.05);
+  lampHead.rotation.z = -0.8;
+  const shadeOuter = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.13, 0.17, 28, 1, true), lampMatte);
+  shadeOuter.castShadow = true; lampHead.add(shadeOuter);
+  const shadeInner = new THREE.Mesh(new THREE.CylinderGeometry(0.046, 0.124, 0.165, 28, 1, true), new THREE.MeshStandardMaterial({ color: 0xfff0d6, roughness: 0.3, metalness: 0.6, side: THREE.BackSide, emissive: 0x553311, emissiveIntensity: 0.3 }));
+  lampHead.add(shadeInner);
+  const shadeCap = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.02, 28), lampMatte);
+  shadeCap.position.y = 0.085; lampHead.add(shadeCap);
   lampGroup.add(lampHead);
+
   scene.add(lampGroup);
 
-  // SpotLight pointing down-right from the lamp head
-  deskLightBulb = new THREE.PointLight(0xffa233, 5.0, 7);
-  deskLightBulb.position.set(-2.16, -0.1, 0.45);
+  // SpotLight from the lamp head, pooling onto the notepad on the desk
+  deskLightBulb = new THREE.SpotLight(0xffd9ad, 16.0, 7, Math.PI / 6, 0.5, 1.4);
+  deskLightBulb.position.set(-1.86, -0.1, 1.2);
+  deskLightBulb.target.position.set(-1.25, -0.92, 1.2);
   deskLightBulb.castShadow = true;
+  deskLightBulb.shadow.mapSize.width = 1024;
+  deskLightBulb.shadow.mapSize.height = 1024;
+  deskLightBulb.shadow.bias = -0.001;
   scene.add(deskLightBulb);
+  scene.add(deskLightBulb.target);
+
+  // Warm bulb glow sphere at lamp head
+  bulbGlow = new THREE.Mesh(
+    new THREE.SphereGeometry(0.03, 12, 12),
+    new THREE.MeshBasicMaterial({ color: 0xffeebb })
+  );
+  bulbGlow.position.set(-1.86, -0.1, 1.2);
+  scene.add(bulbGlow);
+
+  // E2. Open notebook on the desk under the lamp — left page = to-do, right page = blank/drawable
+  const notebookGroup = new THREE.Group();
+  notebookGroup.position.set(-1.18, -0.818, 1.12);
+  notebookGroup.rotation.x = -Math.PI / 2;  // lie flat, pages facing up
+  notebookGroup.rotation.z = 0.08;          // slight natural yaw on the desk
+
+  const coverMat = new THREE.MeshPhysicalMaterial({ color: 0x1c2230, roughness: 0.55, metalness: 0.1, clearcoat: 0.4, clearcoatRoughness: 0.3, envMapIntensity: 0.6 });
+  const cover = new THREE.Mesh(new THREE.BoxGeometry(0.70, 0.46, 0.022), coverMat);
+  cover.position.set(0, 0, -0.014);
+  cover.castShadow = true; cover.receiveShadow = true;
+  notebookGroup.add(cover);
+
+  const pageMatBase = { roughness: 0.82, metalness: 0.0, clearcoat: 0.22, clearcoatRoughness: 0.4, envMapIntensity: 0.4 };
+
+  // left page: to-do list
+  todoCanvas = document.createElement('canvas'); todoCanvas.width = 384; todoCanvas.height = 504;
+  todoCtx = todoCanvas.getContext('2d');
+  todoTexture = new THREE.CanvasTexture(todoCanvas);
+  drawTodoPage();
+  const leftPage = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.42), new THREE.MeshPhysicalMaterial({ map: todoTexture, ...pageMatBase }));
+  leftPage.position.set(-0.165, 0, 0.002);
+  leftPage.receiveShadow = true;
+  notebookGroup.add(leftPage);
+
+  // right page: blank, drawable with ink
+  notepadCanvas = document.createElement('canvas'); notepadCanvas.width = 384; notepadCanvas.height = 504;
+  notepadCtx = notepadCanvas.getContext('2d');
+  notepadTexture = new THREE.CanvasTexture(notepadCanvas);
+  drawNotepadBase();
+  notepadMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.42), new THREE.MeshPhysicalMaterial({ map: notepadTexture, ...pageMatBase }));
+  notepadMesh.position.set(0.165, 0, 0.002);
+  notepadMesh.receiveShadow = true;
+  notepadMesh.userData.clickKind = 'notepad';
+  notebookGroup.add(notepadMesh);
+
+  // spiral binding rings down the middle
+  const ringMat = new THREE.MeshStandardMaterial({ color: 0xcfd2d6, roughness: 0.3, metalness: 0.9, envMapIntensity: 0.9 });
+  for (let i = 0; i < 9; i++) {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.012, 0.0035, 8, 16), ringMat);
+    ring.position.set(0, 0.19 - i * 0.046, 0.006);
+    ring.rotation.y = Math.PI / 2;
+    notebookGroup.add(ring);
+  }
+
+  scene.add(notebookGroup);
 
   // F. Computer Tower Custom PC Chassis (Right - Matching Reference Image)
-  const pcGroup = new THREE.Group();
+  pcGroup = new THREE.Group();
   pcGroup.position.set(1.85, -1.65, -0.2);
 
-  // PSU Shroud base cover (dark chassis bottom box)
-  const psuShroud = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.35, 1.35), frameMat);
+  // White satin case panels — modern, powerful look
+  const pcCaseMat = new THREE.MeshPhysicalMaterial({ color: 0xf2f2f4, roughness: 0.45, metalness: 0.1, clearcoat: 0.3, clearcoatRoughness: 0.4 });
+
+  // PSU Shroud base cover (white chassis bottom box)
+  const psuShroud = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.35, 1.35), pcCaseMat);
   psuShroud.position.set(0, -0.55, 0);
   psuShroud.castShadow = true;
   psuShroud.receiveShadow = true;
   pcGroup.add(psuShroud);
 
   // Top panel
-  const topPanel = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.08, 1.35), frameMat);
+  const topPanel = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.08, 1.35), pcCaseMat);
   topPanel.position.set(0, 0.68, 0);
   topPanel.castShadow = true;
   pcGroup.add(topPanel);
 
   // Rear panel
-  const rearPanel = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.3, 0.08), frameMat);
+  const rearPanel = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.3, 0.08), pcCaseMat);
   rearPanel.position.set(0, 0.06, -0.63);
   rearPanel.castShadow = true;
   pcGroup.add(rearPanel);
 
-  // Front panel (with vertical intake detailing)
-  const frontPanel = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.3, 0.08), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9, wireframe: true }));
-  frontPanel.position.set(0, 0.06, 0.63);
-  pcGroup.add(frontPanel);
+  // Slim white front frame (open center so the RGB fans show) + metal corner trim
+  const frontBarV = new THREE.BoxGeometry(0.06, 1.32, 0.06);
+  const frontBarH = new THREE.BoxGeometry(0.84, 0.07, 0.06);
+  const fFrameL = new THREE.Mesh(frontBarV, pcCaseMat); fFrameL.position.set(-0.39, 0.06, 0.64); pcGroup.add(fFrameL);
+  const fFrameR = new THREE.Mesh(frontBarV, pcCaseMat); fFrameR.position.set(0.39, 0.06, 0.64); pcGroup.add(fFrameR);
+  const fFrameT = new THREE.Mesh(frontBarH, pcCaseMat); fFrameT.position.set(0, 0.69, 0.64); pcGroup.add(fFrameT);
+  const fFrameB = new THREE.Mesh(frontBarH, pcCaseMat); fFrameB.position.set(0, -0.57, 0.64); pcGroup.add(fFrameB);
+
+  const pcTrimMat = new THREE.MeshPhysicalMaterial({ color: 0xdedee4, roughness: 0.28, metalness: 0.6, clearcoat: 0.5, clearcoatRoughness: 0.18, envMapIntensity: 1.0 });
+  const trimGeo = new THREE.BoxGeometry(0.05, 1.34, 0.05);
+  [[-0.395, 0.665], [0.395, 0.665], [-0.395, -0.665], [0.395, -0.665]].forEach(([tx, tz]) => {
+    const t = new THREE.Mesh(trimGeo, pcTrimMat); t.position.set(tx, 0.06, tz); pcGroup.add(t);
+  });
+  // vertical RGB accent strip on the front-left corner
+  const frontRgb = new THREE.Mesh(new THREE.BoxGeometry(0.012, 1.18, 0.012), new THREE.MeshStandardMaterial({ color: 0x00b0ff, emissive: 0x00b0ff, emissiveIntensity: 1.5, roughness: 0.3 }));
+  frontRgb.position.set(-0.36, 0.06, 0.67); pcGroup.add(frontRgb);
+  fanRings.push(frontRgb.material.emissive);
 
   // Right Side cover (Solid metal)
-  const rightCover = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.3, 1.3), frameMat);
+  const rightCover = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.3, 1.3), pcCaseMat);
   rightCover.position.set(0.38, 0.06, 0);
   rightCover.castShadow = true;
   pcGroup.add(rightCover);
 
-  // Glass Side panel (Left)
+  // Wrap-around tempered glass — left side + front
   const glassMat = new THREE.MeshPhysicalMaterial({
-    color: 0xffffff,
+    color: 0xaad4ff,
     transparent: true,
-    opacity: 0.35,
-    roughness: 0.1,
-    transmission: 0.9,
+    opacity: 0.12,
+    roughness: 0.04,
+    metalness: 0.0,
+    transmission: 0.96,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.02,
+    reflectivity: 0.9,
+    envMapIntensity: 1.0,
     depthWrite: false
   });
-  const glassPanel = new THREE.Mesh(new THREE.BoxGeometry(0.02, 1.3, 1.3), glassMat);
-  glassPanel.position.set(-0.38, 0.06, 0);
-  pcGroup.add(glassPanel);
+  const glassSide = new THREE.Mesh(new THREE.BoxGeometry(0.02, 1.26, 1.26), glassMat);
+  glassSide.position.set(-0.385, 0.06, 0.02);
+  pcGroup.add(glassSide);
+  const glassFront = new THREE.Mesh(new THREE.BoxGeometry(0.72, 1.26, 0.02), glassMat);
+  glassFront.position.set(0, 0.06, 0.665);
+  pcGroup.add(glassFront);
 
-  // Motherboard Backplate (Dark grey/black)
-  const mobo = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.1, 1.1), new THREE.MeshStandardMaterial({ color: 0x1e1e24, roughness: 0.85 }));
-  mobo.position.set(0.32, 0.06, 0);
+  // Motherboard on the right inner wall (faces the left glass)
+  const moboMat = new THREE.MeshStandardMaterial({ color: 0x111119, roughness: 0.7, metalness: 0.25 });
+  const mobo = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.12, 1.12), moboMat);
+  mobo.position.set(0.33, 0.1, -0.02);
   pcGroup.add(mobo);
 
-  // VRM Heatsinks on the left of CPU
-  const heatsinkL = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.28, 0.1), standMat);
-  heatsinkL.position.set(0.27, 0.22, -0.28);
-  pcGroup.add(heatsinkL);
+  const darkMetal = new THREE.MeshPhysicalMaterial({ color: 0x17171c, roughness: 0.5, metalness: 0.75, envMapIntensity: 0.7 });
+  // VRM / IO heatsinks
+  [[0.30, 0.52, -0.30], [0.30, 0.52, 0.30]].forEach(p => {
+    const hs = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.32, 0.18), darkMetal);
+    hs.position.set(p[0], p[1], p[2]); pcGroup.add(hs);
+  });
 
-  // CPU Cooler Hub and Fan (Glowing Blue ring & core)
-  const aioBase = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.22, 0.22), new THREE.MeshStandardMaterial({ color: 0x222222 }));
-  aioBase.position.set(0.24, 0.15, -0.05);
-  pcGroup.add(aioBase);
+  // CPU AIO pump block with RGB ring
+  const aioPump = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.2, 0.2), darkMetal);
+  aioPump.position.set(0.27, 0.34, -0.02); pcGroup.add(aioPump);
+  const aioRgb = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.012, 24), new THREE.MeshStandardMaterial({ color: 0x00b0ff, emissive: 0x00b0ff, emissiveIntensity: 1.4, roughness: 0.3 }));
+  aioRgb.rotation.z = Math.PI / 2; aioRgb.position.set(0.232, 0.34, -0.02); pcGroup.add(aioRgb);
+  fanRings.push(aioRgb.material.emissive);
 
-  // 4 RAM Sticks (alternating blue/purple glowing rods)
-  const ramColors = [0x00b0ff, 0xd500f9, 0x00b0ff, 0xd500f9];
+  // 4 RGB RAM sticks
   for (let i = 0; i < 4; i++) {
-    const rMat = new THREE.MeshBasicMaterial({ color: ramColors[i] });
-    const ram = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.26, 0.025), rMat);
-    ram.position.set(0.25, 0.15, 0.08 + i * 0.045);
-    pcGroup.add(ram);
+    const ramBody = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.3, 0.03), darkMetal);
+    ramBody.position.set(0.265, 0.18, 0.10 + i * 0.05); pcGroup.add(ramBody);
+    const ramTop = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.022, 0.032), new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 1.2, roughness: 0.3 }));
+    ramTop.position.set(0.265, 0.335, 0.10 + i * 0.05); pcGroup.add(ramTop);
+    fanRings.push(ramTop.material.emissive);
   }
 
-  // Horizontal GPU (Light grey/white, glowing blue LED strip)
-  const gpuBody = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.14, 0.85), new THREE.MeshStandardMaterial({ color: 0xe0e0e0, roughness: 0.55 }));
-  gpuBody.position.set(0.16, -0.15, -0.05);
-  gpuBody.castShadow = true;
-  pcGroup.add(gpuBody);
+  // Horizontal GPU: shroud + white backplate + RGB edge + 2 fans
+  const gpuShroud = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.12, 0.8), new THREE.MeshPhysicalMaterial({ color: 0x1a1a20, roughness: 0.45, metalness: 0.6, envMapIntensity: 0.7 }));
+  gpuShroud.position.set(0.16, -0.18, -0.02); gpuShroud.castShadow = true; pcGroup.add(gpuShroud);
+  const gpuBack = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.13, 0.82), pcCaseMat);
+  gpuBack.position.set(0.30, -0.18, -0.02); pcGroup.add(gpuBack);
+  const gpuRgb = new THREE.Mesh(new THREE.BoxGeometry(0.245, 0.012, 0.02), new THREE.MeshStandardMaterial({ color: 0xff2d75, emissive: 0xff2d75, emissiveIntensity: 1.3, roughness: 0.3 }));
+  gpuRgb.position.set(0.16, -0.115, 0.36); pcGroup.add(gpuRgb);
+  fanRings.push(gpuRgb.material.emissive);
+  [-0.18, 0.16].forEach(zz => {
+    const gf = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.052, 0.012, 20), new THREE.MeshStandardMaterial({ color: 0x0b0b0d, roughness: 0.85 }));
+    gf.position.set(0.12, -0.245, zz); pcGroup.add(gf);
+  });
 
-  const gpuLed = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.018, 0.82), new THREE.MeshBasicMaterial({ color: 0x00b0ff }));
-  gpuLed.position.set(0.03, -0.15, -0.05);
-  pcGroup.add(gpuLed);
+  // Braided cables (subtle)
+  const cableMat = new THREE.MeshStandardMaterial({ color: 0xe8e8ec, roughness: 0.6, metalness: 0.0 });
+  [
+    [[0.27, 0.22, 0.06], [0.18, 0.0, 0.2], [0.12, -0.3, 0.34]],
+    [[0.27, 0.24, -0.06], [0.2, 0.05, -0.2], [0.14, -0.28, -0.34]]
+  ].forEach(pts => {
+    const curve = new THREE.CatmullRomCurve3(pts.map(p => new THREE.Vector3(p[0], p[1], p[2])));
+    const cable = new THREE.Mesh(new THREE.TubeGeometry(curve, 20, 0.012, 8, false), cableMat);
+    pcGroup.add(cable);
+  });
 
-  // PSU Box at bottom left (HDD/PSU box in case floor)
-  const psuBox = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.3, 0.52), new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.7 }));
-  psuBox.position.set(0.12, -0.36, -0.34);
-  pcGroup.add(psuBox);
-
-  // Orange case status LEDs on top right edge
-  const statusLedR = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8), new THREE.MeshBasicMaterial({ color: 0xff3b30 }));
-  statusLedR.position.set(-0.35, 0.73, 0.55);
-  pcGroup.add(statusLedR);
-
-  const statusLedG = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8), new THREE.MeshBasicMaterial({ color: 0x4cd964 }));
-  statusLedG.position.set(-0.35, 0.73, 0.52);
-  pcGroup.add(statusLedG);
+  // PSU shroud underglow + front power LED
+  const psuGlow = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.012, 0.012), new THREE.MeshStandardMaterial({ color: 0x00b0ff, emissive: 0x00b0ff, emissiveIntensity: 1.0, roughness: 0.4 }));
+  psuGlow.position.set(0.0, -0.36, 0.5); pcGroup.add(psuGlow);
+  fanRings.push(psuGlow.material.emissive);
+  const powerLed = new THREE.Mesh(new THREE.SphereGeometry(0.01, 8, 8), new THREE.MeshBasicMaterial({ color: 0x3aa0ff }));
+  powerLed.position.set(0.0, -0.55, 0.69); pcGroup.add(powerLed);
 
   scene.add(pcGroup);
 
-  // Internal glowing case light
-  pcRigLight = new THREE.PointLight(0x00f5ff, 4.0, 3.5);
-  pcRigLight.position.set(1.65, -1.5, -0.2);
-  pcRigLight.castShadow = true;
+  // Internal lighting — bright white core + RGB fills
+  pcRigLight = new THREE.PointLight(0xffffff, 3.5, 3.0);
+  pcRigLight.position.set(1.7, -1.5, -0.1);
   scene.add(pcRigLight);
+  const pcRgbA = new THREE.PointLight(0x00b0ff, 2.0, 2.2);
+  pcRgbA.position.set(1.7, -1.2, 0.1); scene.add(pcRgbA);
+  const pcRgbB = new THREE.PointLight(0xff2d75, 1.4, 2.0);
+  pcRgbB.position.set(1.7, -1.85, 0.1); scene.add(pcRgbB);
 
 
   // Generic Rig Fan Builder (flat cylinders in XZ plane radiating outwards)
   function createRigFanCustom(shroudColor, bladeColor, bladeOpacity = 0.7) {
     const group = new THREE.Group();
-    // Shroud casing
-    const shroudMat = new THREE.MeshBasicMaterial({ color: shroudColor, transparent: true, opacity: 0.8 });
+    // Shroud casing with emissive RGB glow
     const isGlowing = shroudColor !== 0x1a1a1a && shroudColor !== 0x2c2c2c;
-    const sMat = isGlowing ? shroudMat : new THREE.MeshStandardMaterial({ color: shroudColor, roughness: 0.7 });
+    const sMat = isGlowing
+      ? new THREE.MeshStandardMaterial({ color: shroudColor, emissive: shroudColor, emissiveIntensity: 0.7, transparent: true, opacity: 0.85, roughness: 0.5 })
+      : new THREE.MeshPhysicalMaterial({ color: shroudColor, roughness: 0.6, metalness: 0.4 });
     
     const shroud = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.12, 0.12, 0.04, 24, 1, true),
+      new THREE.CylinderGeometry(0.12, 0.12, 0.04, 32, 1, true),
       sMat
     );
     group.add(shroud);
 
     // Hub
-    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.03, 12), new THREE.MeshStandardMaterial({ color: bladeColor, roughness: 0.6 }));
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.03, 16), new THREE.MeshPhysicalMaterial({ color: 0x1a1a1a, roughness: 0.4, metalness: 0.7 }));
     group.add(hub);
 
-    // Motion-blurred spin disc layers (three concentric transparent cylinders along Y)
-    const blurMat1 = new THREE.MeshBasicMaterial({ color: bladeColor, transparent: true, opacity: bladeOpacity * 0.25 });
-    const disc1 = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.005, 16), blurMat1);
+    // Motion-blurred spin disc layers
+    const blurMat1 = new THREE.MeshStandardMaterial({ color: bladeColor, emissive: isGlowing ? shroudColor : 0x000000, emissiveIntensity: 0.2, transparent: true, opacity: bladeOpacity * 0.25 });
+    const disc1 = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.005, 24), blurMat1);
     group.add(disc1);
 
-    const blurMat2 = new THREE.MeshBasicMaterial({ color: bladeColor, transparent: true, opacity: bladeOpacity * 0.4 });
-    const disc2 = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.006, 16), blurMat2);
+    const blurMat2 = new THREE.MeshStandardMaterial({ color: bladeColor, emissive: isGlowing ? shroudColor : 0x000000, emissiveIntensity: 0.3, transparent: true, opacity: bladeOpacity * 0.4 });
+    const disc2 = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.006, 24), blurMat2);
     group.add(disc2);
 
-    const blurMat3 = new THREE.MeshBasicMaterial({ color: bladeColor, transparent: true, opacity: bladeOpacity * 0.55 });
-    const disc3 = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.007, 16), blurMat3);
+    const blurMat3 = new THREE.MeshStandardMaterial({ color: bladeColor, emissive: isGlowing ? shroudColor : 0x000000, emissiveIntensity: 0.4, transparent: true, opacity: bladeOpacity * 0.55 });
+    const disc3 = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.007, 24), blurMat3);
     group.add(disc3);
 
-    // Blurred blade radial streaks (12 static thin bars of very low opacity, flat in XZ plane)
+    // Blurred blade radial streaks
     const streakGeom = new THREE.BoxGeometry(0.006, 0.004, 0.10);
     const streakMat = new THREE.MeshBasicMaterial({ color: bladeColor, transparent: true, opacity: bladeOpacity * 0.2 });
     for (let i = 0; i < 12; i++) {
@@ -1081,37 +1476,78 @@ function initThree() {
     return group;
   }
 
-  // 1. Front Fans x3 (Glowing Blue, mounted on front panel facing forward, scaled and centered)
-  fan1 = createRigFanCustom(0x00b0ff, 0x333333, 0.4);
-  fan1.position.set(1.85, -1.25, 0.38);
-  fan1.rotation.set(Math.PI / 2, 0, 0); // points along Z (pointing forward)
-  scene.add(fan1);
+  // 1. Front intake fans x3 — white-shining with cycling RGB rings, behind the front glass
+  fan1 = createRigFanCustom(0xffffff, 0xffffff, 0.5);
+  fan1.position.set(1.85, -1.18, 0.44); fan1.rotation.set(Math.PI / 2, 0, 0);
+  scene.add(fan1); addFanRing(fan1);
 
-  // fan2 (front middle)
-  fan2 = createRigFanCustom(0x00b0ff, 0x333333, 0.4);
-  fan2.position.set(1.85, -1.55, 0.38);
-  fan2.rotation.set(Math.PI / 2, 0, 0); // points along Z
-  scene.add(fan2);
+  fan2 = createRigFanCustom(0xffffff, 0xffffff, 0.5);
+  fan2.position.set(1.85, -1.50, 0.44); fan2.rotation.set(Math.PI / 2, 0, 0);
+  scene.add(fan2); addFanRing(fan2);
 
-  // fan3 (front lower)
-  fan3 = createRigFanCustom(0x00b0ff, 0x333333, 0.4);
-  fan3.position.set(1.85, -1.85, 0.38);
-  fan3.rotation.set(Math.PI / 2, 0, 0); // points along Z
-  scene.add(fan3);
+  fan3 = createRigFanCustom(0xffffff, 0xffffff, 0.5);
+  fan3.position.set(1.85, -1.82, 0.44); fan3.rotation.set(Math.PI / 2, 0, 0);
+  scene.add(fan3); addFanRing(fan3);
+
+  // 2. Top radiator fans x2 — under the top panel, facing down
+  const radFanA = createRigFanCustom(0xffffff, 0xffffff, 0.45);
+  radFanA.position.set(1.72, -1.02, 0.12); scene.add(radFanA); addFanRing(radFanA);
+  const radFanB = createRigFanCustom(0xffffff, 0xffffff, 0.45);
+  radFanB.position.set(1.72, -1.02, -0.18); scene.add(radFanB); addFanRing(radFanB);
+
+  // White glow spilling from the front fans
+  const pcFrontLight = new THREE.PointLight(0xffffff, 1.4, 1.9);
+  pcFrontLight.position.set(1.85, -1.5, 0.62);
+  scene.add(pcFrontLight);
 
   // G. Coffee Mug on desk (Shifted far left to clear keyboard & speakers)
-  const mugBody = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.28), keyMatWhite);
-  mugBody.position.set(-1.4, -0.73, 0.8);
+  const ceramicMat = new THREE.MeshPhysicalMaterial({
+    color: 0xf0ebe5,
+    roughness: 0.25,
+    metalness: 0.0,
+    clearcoat: 0.9,
+    clearcoatRoughness: 0.06,
+    reflectivity: 0.6,
+    side: THREE.DoubleSide,
+    envMapIntensity: 0.7
+  });
+  const coffeeMat = new THREE.MeshPhysicalMaterial({
+    color: 0x3a2110,
+    roughness: 0.08,
+    metalness: 0.0,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.02,
+    envMapIntensity: 1.0
+  });
+
+  // Mug assembled as one group so it can shake / topple as a unit
+  mugGroup = new THREE.Group();
+  mugGroup.position.set(-1.4, -0.73, 0.8);
+
+  // Hollow ceramic body — lathe profile: outer wall up, over the rim, down the
+  // inner wall, across the floor. Genuinely open at the top.
+  const mugProfile = [
+    [0.001, -0.140], [0.108, -0.140], [0.118, -0.116], [0.119, 0.100],
+    [0.118, 0.138], [0.104, 0.140], [0.103, -0.085], [0.094, -0.108], [0.001, -0.108]
+  ].map(p => new THREE.Vector2(p[0], p[1]));
+  const mugBody = new THREE.Mesh(new THREE.LatheGeometry(mugProfile, 48), ceramicMat);
   mugBody.castShadow = true;
-  scene.add(mugBody);
+  mugBody.receiveShadow = true;
+  mugGroup.add(mugBody);
 
-  const mugLiquid = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.01), new THREE.MeshStandardMaterial({ color: 0x4e2714 }));
-  mugLiquid.position.set(-1.4, -0.6, 0.8);
-  scene.add(mugLiquid);
+  // Coffee ~2/3 full: radius inset from the 0.103 inner wall, top well below the
+  // 0.14 rim, floor just above the 0.108 inner floor — zero clipping anywhere.
+  mugLiquid = new THREE.Mesh(new THREE.CylinderGeometry(0.097, 0.097, 0.17, 40), coffeeMat);
+  mugLiquid.position.set(0, -0.022, 0); // surface ≈ y 0.063, floor ≈ -0.107
+  mugGroup.add(mugLiquid);
 
-  const mugHandle = new THREE.Mesh(new THREE.TorusGeometry(0.08, 0.02, 6, 12), keyMatWhite);
-  mugHandle.position.set(-1.53, -0.73, 0.8);
-  scene.add(mugHandle);
+  const mugHandle = new THREE.Mesh(new THREE.TorusGeometry(0.082, 0.022, 14, 28), ceramicMat);
+  mugHandle.position.set(-0.131, 0.0, 0);
+  mugHandle.rotation.z = 0.08;
+  mugHandle.castShadow = true;
+  mugGroup.add(mugHandle);
+
+  scene.add(mugGroup);
 
   // Steam particle array (centered above relocated mug)
   for (let i = 0; i < 6; i++) {
@@ -1124,43 +1560,127 @@ function initThree() {
     steamParticles.push({ mesh: steamPart, speed: 0.003 + Math.random() * 0.003, born: Date.now() });
   }
 
+  // ── REGISTER INTERACTIVE CLICK TARGETS ──
+  function tagClickable(root, kind) {
+    root.userData.clickKind = kind;
+    root.userData.home = {
+      px: root.position.x, py: root.position.y, pz: root.position.z,
+      rx: root.rotation.x, ry: root.rotation.y, rz: root.rotation.z
+    };
+  }
+  tagClickable(mugGroup, 'mug');
+  tagClickable(lampGroup, 'lamp');
+  tagClickable(speakerL, 'push');
+  tagClickable(speakerR, 'push');
+  tagClickable(mouseGroup, 'push');
+  leftScreen.userData.clickKind = 'monitor';
+  leftScreen.userData.monitor = { w: 1.54, h: 0.94 };
+  centerScreen.userData.clickKind = 'monitor';
+  centerScreen.userData.monitor = { w: 2.44, h: 1.39 };
+  rightScreen.userData.clickKind = 'monitor';
+  rightScreen.userData.monitor = { w: 1.09, h: 1.99 };
 
 
-  // ── SCENE LIGHTING ──
-  const globalAmbient = new THREE.AmbientLight(0x0a0a0c, 1.2);
+
+  // ── CINEMATIC LIGHTING RIG ──
+
+  // 1. Warm ambient base (very low — just prevents pure black)
+  const globalAmbient = new THREE.AmbientLight(0x080810, 0.6);
   scene.add(globalAmbient);
 
-  const deskSpotlight = new THREE.SpotLight(0xffa233, 9, 12, Math.PI / 4, 0.6, 1);
-  deskSpotlight.position.set(0, 3.5, 3.5);
-  deskSpotlight.target = deskMesh;
-  deskSpotlight.castShadow = true;
-  deskSpotlight.shadow.bias = -0.001;
-  scene.add(deskSpotlight);
+  // 2. Key light — warm overhead from upper-left (simulates ceiling studio softbox)
+  const keyLight = new THREE.SpotLight(0xffeedd, 15, 18, Math.PI / 5, 0.55, 1.5);
+  keyLight.position.set(-2, 4.5, 3);
+  keyLight.target = deskMesh;
+  keyLight.castShadow = true;
+  keyLight.shadow.mapSize.width = 2048;
+  keyLight.shadow.mapSize.height = 2048;
+  keyLight.shadow.bias = -0.0005;
+  keyLight.shadow.normalBias = 0.02;
+  keyLight.shadow.radius = 4;
+  scene.add(keyLight);
+
+  // 3. Fill light — cool blue from right (cinematic contrast)
+  const fillLight = new THREE.PointLight(0x4488cc, 3.0, 12);
+  fillLight.position.set(3.5, 1.5, 2);
+  scene.add(fillLight);
+
+  // 4. Rim light — cyan edge light from behind (separation from background)
+  const rimLight = new THREE.SpotLight(0x00ccff, 6.0, 15, Math.PI / 6, 0.7, 1.5);
+  rimLight.position.set(0, 2.5, -5);
+  rimLight.target = deskMesh;
+  scene.add(rimLight);
+
+  // 5. Under-desk warm bounce fill
+  const bounceLight = new THREE.PointLight(0xff9944, 1.5, 5);
+  bounceLight.position.set(0, -2.2, 1);
+  scene.add(bounceLight);
+
+  // 6. Monitor screen light bleed — emissive glow planes behind each monitor
+  const screenGlowMat = new THREE.MeshBasicMaterial({ color: 0x1a2a40, transparent: true, opacity: 0.3 });
+  const leftGlow = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 1.5), screenGlowMat);
+  leftGlow.position.set(-1.8, 0.0, 0.15);
+  leftGlow.rotation.y = Math.PI / 6;
+  scene.add(leftGlow);
+
+  const centerGlow = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 2.0), screenGlowMat);
+  centerGlow.position.set(0, 0.2, -0.25);
+  scene.add(centerGlow);
+
+  const rightGlow = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 2.5), screenGlowMat);
+  rightGlow.position.set(1.9, 0.5, 0.05);
+  rightGlow.rotation.y = -Math.PI / 8;
+  scene.add(rightGlow);
+
+  // 7. Monitor screen point lights (subtle light cast onto desk from screens)
+  const monitorLightL = new THREE.PointLight(0x2244aa, 2.0, 4);
+  monitorLightL.position.set(-1.8, 0.0, 0.5);
+  scene.add(monitorLightL);
+
+  const monitorLightC = new THREE.PointLight(0x1a3355, 2.5, 5);
+  monitorLightC.position.set(0, 0.2, 0.3);
+  scene.add(monitorLightC);
+
+  const monitorLightR = new THREE.PointLight(0x224488, 1.5, 3.5);
+  monitorLightR.position.set(1.9, 0.5, 0.4);
+  scene.add(monitorLightR);
+
+  // 8. PC case RGB internal glow
+  const pcRgbBlue = new THREE.PointLight(0x00aaff, 4.0, 3);
+  pcRgbBlue.position.set(1.55, -1.5, -0.1);
+  scene.add(pcRgbBlue);
+
+  const pcRgbPurple = new THREE.PointLight(0x8844ff, 2.5, 2.5);
+  pcRgbPurple.position.set(1.95, -1.3, -0.3);
+  scene.add(pcRgbPurple);
 
   // Shadows floor receiver plane
   const floorGeom = new THREE.PlaneGeometry(30, 30);
-  const floorMat  = new THREE.ShadowMaterial({ opacity: 0.6 });
+  const floorMat  = new THREE.ShadowMaterial({ opacity: 0.7 });
   const floorMesh = new THREE.Mesh(floorGeom, floorMat);
   floorMesh.position.y = -1.81;
   floorMesh.rotation.x = -Math.PI / 2;
   floorMesh.receiveShadow = true;
   scene.add(floorMesh);
 
-  // Dynamic dust particles
-  const particleCount = 120;
+  // ── REFINED DUST PARTICLES ──
+  const particleCount = 200;
   const pGeom = new THREE.BufferGeometry();
   const pPositions = new Float32Array(particleCount * 3);
-  for (let i = 0; i < particleCount * 3; i += 3) {
-    pPositions[i]     = (Math.random() - 0.5) * 8; // x
-    pPositions[i + 1] = (Math.random() - 0.5) * 4; // y
-    pPositions[i + 2] = (Math.random() - 0.5) * 6; // z
+  const pSizes = new Float32Array(particleCount);
+  for (let i = 0; i < particleCount; i++) {
+    pPositions[i * 3]     = (Math.random() - 0.5) * 10;
+    pPositions[i * 3 + 1] = (Math.random() - 0.5) * 5;
+    pPositions[i * 3 + 2] = (Math.random() - 0.5) * 8;
+    pSizes[i] = 0.008 + Math.random() * 0.02;
   }
   pGeom.setAttribute('position', new THREE.BufferAttribute(pPositions, 3));
   const pMat = new THREE.PointsMaterial({
-    color: 0xff8c00,
-    size: 0.016,
+    color: 0xffcc88,
+    size: 0.015,
     transparent: true,
-    opacity: 0.45
+    opacity: 0.35,
+    sizeAttenuation: true
   });
   dustParticles = new THREE.Points(pGeom, pMat);
   scene.add(dustParticles);
@@ -1173,7 +1693,7 @@ function initThree() {
       end: "bottom bottom",
       scrub: 1.0,
       snap: {
-        snapTo: [0, 0.25, 0.5, 0.75, 1.0],
+        snapTo: [0, 0.2, 0.4, 0.6, 0.8, 1.0],
         duration: { min: 0.3, max: 0.6 },
         delay: 0.05,
         ease: "power2.out"
@@ -1189,6 +1709,7 @@ function initThree() {
 
   // GSAP interpolates camState coordinates along scroll
   tl.to(camState, { x: -1.4, y: -0.2, z: 2.3, tx: -1.7, ty: -0.4, tz: 0.2, duration: 1.2, ease: "power1.inOut" }) // Focus Left Screen
+    .to(camState, { x: -1.05, y: 0.18, z: 1.75, tx: -1.2, ty: -0.95, tz: 1.1, duration: 1.2, ease: "power1.inOut" }) // Look down at the notebook
     .to(camState, { x: 0, y: -0.1, z: 2.1, tx: 0, ty: -0.2, tz: 0, duration: 1.2, ease: "power1.inOut" })       // Focus Center screen
     .to(camState, { x: 1.3, y: -1.2, z: 2.4, tx: 1.8, ty: -1.8, tz: -0.2, duration: 1.2, ease: "power1.inOut" }) // Focus Rig
     .to(camState, { x: 0, y: 0.4, z: 5.3, tx: 0, ty: -0.3, tz: 0, duration: 1.2, ease: "power1.inOut" });       // Pull back wide
@@ -1216,13 +1737,15 @@ function animate() {
 
 
 
-  // 2. Pulse tower rig light color
+  // 2. Subtle pulse on the white tower core light
   if (pcRigLight) {
-    const time = Date.now() * 0.001;
-    // Blend rgb cyan and orange
-    const r = Math.sin(time) * 0.5 + 0.5;
-    pcRigLight.color.setRGB(r * 0.8, (1 - r) * 0.8, 1);
+    pcRigLight.intensity = 3.2 + Math.sin(Date.now() * 0.002) * 0.5;
   }
+
+  // 2b. RGB cycle for the front fans & speaker accents
+  const rgbT = Date.now() * 0.0006;
+  for (let i = 0; i < fanRings.length; i++) fanRings[i].setHSL((rgbT + i * 0.12) % 1, 0.95, 0.6);
+  for (let i = 0; i < speakerRings.length; i++) speakerRings[i].setHSL((rgbT * 0.8 + i * 0.2 + 0.35) % 1, 0.9, 0.55);
 
   // 3. Float dust particles
   if (dustParticles) {
@@ -1238,6 +1761,7 @@ function animate() {
 
   // 4. Mug steam rising (resetting above the relocated mug at -1.4, 0.8)
   steamParticles.forEach(part => {
+    if (mugState.broken) { part.mesh.material.opacity = 0; return; }
     part.mesh.position.y += part.speed;
     const age = Date.now() - part.born;
     part.mesh.material.opacity = Math.max(0, 0.3 * (1 - age / 1200));
@@ -1250,6 +1774,10 @@ function animate() {
   });
 
   // 5. Parallax Camera target calculating
+  // smooth gyro toward its target so phone tilt glides instead of snapping
+  tiltParallaxX += (tiltTargetX - tiltParallaxX) * 0.05;
+  tiltParallaxY += (tiltTargetY - tiltParallaxY) * 0.05;
+
   let px = 0, py = 0;
   if (isMobileDevice) {
     px = tiltParallaxX;
@@ -1301,8 +1829,8 @@ function onDeviceOrientation(e) {
   const normalBeta  = Math.max(-30, Math.min(30, beta - 45)) / 30; // offset based on standard sitting angle (~45 deg)
   const normalGamma = Math.max(-30, Math.min(30, gamma)) / 30;
 
-  tiltParallaxX = normalGamma * 0.5;
-  tiltParallaxY = -normalBeta * 0.4;
+  tiltTargetX = normalGamma * 0.22;
+  tiltTargetY = -normalBeta * 0.18;
 }
 
 // iOS permission requesting on user interaction
@@ -1351,7 +1879,23 @@ function resizeCanvas() {
   const cw = filmCanvas.clientWidth;
   const ch = filmCanvas.clientHeight;
   renderer.setSize(cw, ch, false);
-  camera.aspect = cw / ch;
+  applyCameraFraming(cw, ch);
+}
+
+// Dynamic framing: on narrow/portrait screens widen the vertical FOV so the desk
+// stays fully framed (keeps the horizontal field ~constant) instead of zooming in.
+function applyCameraFraming(cw, ch) {
+  if (!camera) return;
+  const aspect = cw / ch;
+  camera.aspect = aspect;
+  const baseFov = 42, refAspect = 1.6;
+  if (aspect < refAspect) {
+    const hFovRef = 2 * Math.atan(Math.tan(baseFov * Math.PI / 360) * refAspect);
+    const vFov = 2 * Math.atan(Math.tan(hFovRef / 2) / aspect) * 180 / Math.PI;
+    camera.fov = Math.min(vFov, 82);
+  } else {
+    camera.fov = baseFov;
+  }
   camera.updateProjectionMatrix();
 }
 
@@ -1744,6 +2288,25 @@ $$('.project-card').forEach((card) => {
   });
 });
 
+/* ══ R2 media (videos) — half-res variants ready ══ */
+const MEDIA_BASE = "https://assets.ezz-tantawy.org/";
+const HALF_RES_AVAILABLE = false;            // flip to true once *-540p.mp4 variants are uploaded to R2
+const PROJECT_VIDEO = {
+  2:  'Ard elshog3an Promo_Ezzeldeen.mp4',   // Land of the Brave
+  3:  'Color grading sample.mp4',            // Colour grading
+  7:  'Showcase_3d.mp4',                     // Apartment visualization
+  9:  'AI easter video.mp4',                 // ComfyUI AI animation
+  10: 'Building animation.mp4'               // AI building VFX
+};
+let videoQuality = (window.localStorage && localStorage.getItem('vq')) || 'sd'; // default to the lighter player
+function mediaURL(file, q) {
+  if (q === 'sd' && HALF_RES_AVAILABLE) {
+    const dot = file.lastIndexOf('.');
+    return MEDIA_BASE + encodeURIComponent(file.slice(0, dot) + '-540p' + file.slice(dot));
+  }
+  return MEDIA_BASE + encodeURIComponent(file);
+}
+
 function openModal(project) {
   const modalImage = $('modalImage');
   const modalCat   = $('modalCat');
@@ -1769,6 +2332,34 @@ function openModal(project) {
     }
   }
 
+  // R2 video playback when available, otherwise the still image
+  const wrap = modalImage ? modalImage.parentElement : null;
+  const oldVid = $('modalVideo'); if (oldVid) { oldVid.pause(); oldVid.remove(); }
+  const oldQ = document.querySelector('.modal-quality'); if (oldQ) oldQ.remove();
+  const vfile = PROJECT_VIDEO[project.index];
+  if (vfile && wrap) {
+    if (modalImage) modalImage.style.display = 'none';
+    const v = document.createElement('video');
+    v.id = 'modalVideo'; v.className = 'modal-video';
+    v.src = mediaURL(vfile, videoQuality);
+    v.controls = true; v.autoplay = true; v.loop = true; v.muted = true; v.playsInline = true; v.preload = 'metadata';
+    wrap.appendChild(v);
+    const q = document.createElement('div');
+    q.className = 'modal-quality';
+    q.innerHTML = `<span>Quality</span><button data-q="sd" class="${videoQuality === 'sd' ? 'active' : ''}">SD</button><button data-q="hd" class="${videoQuality === 'hd' ? 'active' : ''}">HD</button>`;
+    q.addEventListener('click', (ev) => {
+      const b = ev.target.closest('button[data-q]'); if (!b) return;
+      videoQuality = b.dataset.q;
+      if (window.localStorage) localStorage.setItem('vq', videoQuality);
+      q.querySelectorAll('button').forEach(x => x.classList.toggle('active', x.dataset.q === videoQuality));
+      const t = v.currentTime; v.src = mediaURL(vfile, videoQuality);
+      v.addEventListener('loadedmetadata', () => { try { v.currentTime = t; } catch (e) {} v.play().catch(() => {}); }, { once: true });
+    });
+    wrap.appendChild(q);
+  } else if (modalImage) {
+    modalImage.style.display = '';
+  }
+
   projectModal.classList.add('open');
   projectModal.setAttribute('aria-hidden', 'false');
   modalBackdrop.classList.add('open');
@@ -1776,6 +2367,7 @@ function openModal(project) {
 }
 
 function closeModal() {
+  const mv = $('modalVideo'); if (mv) mv.pause();
   projectModal.classList.remove('open');
   projectModal.setAttribute('aria-hidden', 'true');
   modalBackdrop.classList.remove('open');
@@ -1791,7 +2383,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 /* ══════════════════════════════════
-// INTERACTIVE REQUEST WIZARD LOGIC
+   INTERACTIVE REQUEST WIZARD LOGIC */
 // ══════════════════════════════════
 const requestTool = document.getElementById("requestTool");
 const makeRequestBtn = document.getElementById("makeRequestBtn");
@@ -1806,70 +2398,75 @@ const mailConfirmation = document.getElementById("mailConfirmation");
 const mailConfirmationClose = document.getElementById("mailConfirmationClose");
 const mailConfirmationText = document.getElementById("mailConfirmationText");
 const REQUEST_EMAIL = "contact@ezz-tantawy.org";
+const requestAddon = document.getElementById("requestAddon");
+const longTermToggle = document.getElementById("longTermToggle");
 let selectedRequestCategory = "";
-let selectedRequestType = "3D Modeling & Visualization - Interior Design";
+let selectedRequestType = "Long form - Long-Form Video Editing";
+let longTermContract = false;
+let lastAutoBody = "";
+const LONG_TERM_BLOCK = "\n\nLong-term collaboration:\n- I'm also open to an ongoing or retainer arrangement.\n- Rough scope and duration:\n- Expected monthly workload:\n";
 
 const requestGroups = {
-  threeD: {
-    label: "3D Modeling & Visualization",
-    prompt: "Choose a 3D focus",
+  longform: {
+    label: "Long form",
+    prompt: "Choose a long-form focus",
     options: [
       {
-        value: "3D Modeling & Visualization - Interior Design",
-        label: "Interior Design Visualization",
-        body: "Hello Ezz,\n\nI would like to request support with an interior design visualization project.\n\nProject overview:\nSpace type and approximate size:\nDesign style or references:\nAvailable plans, photos, or measurements:\nPreferred deliverables:\nTimeline or deadline:\nAdditional notes:\n\nThank you,"
-      },
-      {
-        value: "3D Modeling & Visualization - Product Visualization",
-        label: "Product Visualization",
-        body: "Hello Ezz,\n\nI would like to request product visualization work for a brand or product presentation.\n\nProduct overview:\nRequired visuals or animation:\nAvailable product files, photos, or references:\nPreferred style, mood, or examples:\nUsage platform:\nTimeline or deadline:\nAdditional notes:\n\nThank you,"
-      },
-      {
-        value: "3D Modeling & Visualization - 3D Animation",
-        label: "3D Animation",
-        body: "Hello Ezz,\n\nI would like to request a 3D animation project.\n\nProject goal:\nScene, product, or space to animate:\nApproximate duration:\nVisual references or style direction:\nAvailable assets:\nTimeline or deadline:\nAdditional notes:\n\nThank you,"
-      }
-    ]
-  },
-  editing: {
-    label: "Video Editing",
-    prompt: "Choose an editing focus",
-    options: [
-      {
-        value: "Video Editing - Short-Form Reel Editing",
-        label: "Short-Form Reel Editing",
-        body: "Hello Ezz,\n\nI would like to request short-form reel editing.\n\nProject goal:\nPlatform and format:\nApproximate number of reels:\nFootage status:\nPreferred pacing, captions, or reference style:\nTimeline or deadline:\nAdditional notes:\n\nThank you,"
-      },
-      {
-        value: "Video Editing - Long-Form Video Editing",
+        value: "Long form - Long-Form Video Editing",
         label: "Long-Form Video Editing",
         body: "Hello Ezz,\n\nI would like to request long-form video editing.\n\nProject goal:\nApproximate final duration:\nFootage status and total raw footage length:\nStructure, story, or reference videos:\nRequired graphics, captions, or sound work:\nTimeline or deadline:\nAdditional notes:\n\nThank you,"
       },
       {
-        value: "Video Editing - Motion Design",
-        label: "Motion Design",
-        body: "Hello Ezz,\n\nI would like to request motion design support.\n\nProject goal:\nType of motion graphics needed:\nBrand assets or visual guidelines:\nPreferred animation style or references:\nFinal format and usage platform:\nTimeline or deadline:\nAdditional notes:\n\nThank you,"
+        value: "Long form - Documentary / Narrative",
+        label: "Documentary / Narrative",
+        body: "Hello Ezz,\n\nI would like to request a documentary or narrative edit.\n\nStory or subject:\nApproximate final duration:\nFootage and interviews available:\nReference tone or style:\nMusic and sound design needs:\nTimeline or deadline:\nAdditional notes:\n\nThank you,"
+      },
+      {
+        value: "Long form - YouTube / Episodic",
+        label: "YouTube / Episodic",
+        body: "Hello Ezz,\n\nI would like to request long-form YouTube or episodic editing.\n\nChannel or series:\nEpisode length and frequency:\nFootage status:\nEditing style (pacing, graphics, captions):\nTimeline or deadline:\nAdditional notes:\n\nThank you,"
       }
     ]
   },
-  longTerm: {
-    label: "Long-Term Project Request",
-    prompt: "Choose a collaboration window",
+  reel: {
+    label: "Reel editing",
+    prompt: "Choose a reel focus",
     options: [
       {
-        value: "Long-Term Project Request - 1-3 Months",
-        label: "1-3 Months",
-        body: "Hello Ezz,\n\nI would like to discuss a 1-3 month creative collaboration.\n\nProject or brand overview:\nSupport needed:\nExpected weekly or monthly workload:\nMain deliverables:\nCommunication and review rhythm:\nIdeal start date:\nAdditional notes:\n\nThank you,"
+        value: "Reel editing - Short-Form Reel Editing",
+        label: "Short-Form Reel Editing",
+        body: "Hello Ezz,\n\nI would like to request short-form reel editing.\n\nProject goal:\nPlatform and format:\nApproximate number of reels:\nFootage status:\nPreferred pacing, captions, or reference style:\nTimeline or deadline:\nAdditional notes:\n\nThank you,"
       },
       {
-        value: "Long-Term Project Request - 3-6 Months",
-        label: "3-6 Months",
-        body: "Hello Ezz,\n\nI would like to discuss a 3-6 month production collaboration.\n\nProject or brand overview:\nSupport needed:\nExpected weekly or monthly workload:\nMain deliverables:\nCommunication and review rhythm:\nIdeal start date:\nAdditional notes:\n\nThank you,"
+        value: "Reel editing - Social Campaign Reels",
+        label: "Social Campaign Reels",
+        body: "Hello Ezz,\n\nI would like to request a batch of social campaign reels.\n\nCampaign goal:\nPlatforms and formats:\nNumber of reels and variations:\nFootage / assets status:\nBrand guidelines or references:\nTimeline or deadline:\nAdditional notes:\n\nThank you,"
       },
       {
-        value: "Long-Term Project Request - 6+ Months",
-        label: "6+ Months",
-        body: "Hello Ezz,\n\nI would like to discuss an ongoing creative partnership for more than 6 months.\n\nProject or brand overview:\nSupport needed:\nExpected weekly or monthly workload:\nMain deliverables:\nCommunication and review rhythm:\nIdeal start date:\nAdditional notes:\n\nThank you,"
+        value: "Reel editing - Motion Design Reel",
+        label: "Motion Design Reel",
+        body: "Hello Ezz,\n\nI would like to request a motion-design-driven reel.\n\nProject goal:\nType of motion graphics needed:\nBrand assets or visual guidelines:\nPreferred animation style or references:\nFinal format and usage platform:\nTimeline or deadline:\nAdditional notes:\n\nThank you,"
+      }
+    ]
+  },
+  threeD: {
+    label: "3D viz/modeling",
+    prompt: "Choose a 3D focus",
+    options: [
+      {
+        value: "3D viz/modeling - Interior Design",
+        label: "Interior Design Visualization",
+        body: "Hello Ezz,\n\nI would like to request support with an interior design visualization project.\n\nProject overview:\nSpace type and approximate size:\nDesign style or references:\nAvailable plans, photos, or measurements:\nPreferred deliverables:\nTimeline or deadline:\nAdditional notes:\n\nThank you,"
+      },
+      {
+        value: "3D viz/modeling - Product Visualization",
+        label: "Product Visualization",
+        body: "Hello Ezz,\n\nI would like to request product visualization work for a brand or product presentation.\n\nProduct overview:\nRequired visuals or animation:\nAvailable product files, photos, or references:\nPreferred style, mood, or examples:\nUsage platform:\nTimeline or deadline:\nAdditional notes:\n\nThank you,"
+      },
+      {
+        value: "3D viz/modeling - 3D Animation",
+        label: "3D Animation",
+        body: "Hello Ezz,\n\nI would like to request a 3D animation project.\n\nProject goal:\nScene, product, or space to animate:\nApproximate duration:\nVisual references or style direction:\nAvailable assets:\nTimeline or deadline:\nAdditional notes:\n\nThank you,"
       }
     ]
   }
@@ -1882,8 +2479,9 @@ const requestOptionsByValue = Object.fromEntries(
 );
 
 function openRequestChoices() {
-  requestTool.classList.add("choices-open");
+  requestTool.classList.add("choices-open", "activated");
   requestChoices.style.display = "flex";
+  if (requestAddon) requestAddon.style.display = "flex";
   if (soundEnabled) playUIClick();
 }
 
@@ -1911,7 +2509,10 @@ function selectRequestCategory(category) {
 }
 
 function updateAutoRequestText(option) {
-  requestDetails.value = option.body;
+  let body = option.body;
+  if (longTermContract) body += LONG_TERM_BLOCK;
+  requestDetails.value = body;
+  lastAutoBody = body;
   requestDetails.placeholder = "Add details, remove anything that does not apply, or leave the prepared note as it is.";
 }
 
@@ -1942,10 +2543,20 @@ function selectRequestType(type) {
 makeRequestBtn?.addEventListener("click", openRequestChoices);
 requestTypeSelect?.addEventListener("change", () => selectRequestType(requestTypeSelect.value));
 
+longTermToggle?.addEventListener("click", () => {
+  longTermContract = !longTermContract;
+  longTermToggle.setAttribute("aria-pressed", String(longTermContract));
+  // refresh the draft only if it is still the untouched auto-generated note
+  const opt = requestOptionsByValue[requestTypeSelect.value] || requestOptionsByValue[selectedRequestType];
+  if (opt && requestDetails.value === lastAutoBody) updateAutoRequestText(opt);
+  if (soundEnabled) playUIClick();
+});
+
 function buildEmailUrls() {
   const type = requestTypeSelect.value || selectedRequestType || "General Project";
-  const subject = `Request | ${type} |`;
-  const body = requestDetails.value.trim();
+  const subject = longTermContract ? `Request | ${type} | Long-term contract |` : `Request | ${type} |`;
+  let body = requestDetails.value.trim();
+  if (longTermContract && !/long-term collaboration/i.test(body)) body += LONG_TERM_BLOCK;
   return {
     gmail: `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(REQUEST_EMAIL)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
     outlook: `https://outlook.live.com/mail/0/deeplink/compose?to=${encodeURIComponent(REQUEST_EMAIL)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
@@ -2119,6 +2730,208 @@ function playKeyboardClack() {
   popOsc.stop(audioCtx.currentTime + 0.04);
 }
 
+/* ── Interactive object helpers ── */
+function findClickRoot(obj) {
+  let cur = obj;
+  while (cur) {
+    if (cur.userData && cur.userData.clickKind) return cur;
+    cur = cur.parent;
+  }
+  return null;
+}
+
+// Short dry impact/crack burst (filtered noise) for breaks & shatters
+function playGlassCrack() {
+  if (!audioCtx) return;
+  const bufSize = Math.floor(audioCtx.sampleRate * 0.15);
+  const buffer = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufSize; i++) data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufSize, 2);
+  const src = audioCtx.createBufferSource(); src.buffer = buffer;
+  const hp = audioCtx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 2200;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(0.14, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.16);
+  src.connect(hp); hp.connect(g); g.connect(gainNode);
+  src.start(); src.stop(audioCtx.currentTime + 0.16);
+}
+
+// Generic push / tilt then spring back to rest
+function nudgePush(root) {
+  const h = root.userData.home;
+  if (!h) return;
+  gsap.killTweensOf(root.rotation);
+  gsap.killTweensOf(root.position);
+  const dirX = (Math.random() - 0.5);
+  const dirZ = (Math.random() - 0.5);
+  gsap.timeline()
+    .to(root.rotation, { x: h.rx + dirZ * 0.22, z: h.rz - dirX * 0.22, duration: 0.12, ease: 'power2.out' })
+    .to(root.rotation, { x: h.rx, y: h.ry, z: h.rz, duration: 0.7, ease: 'elastic.out(1, 0.45)' });
+  gsap.fromTo(root.position, { y: h.py }, { y: h.py + 0.03, duration: 0.12, yoyo: true, repeat: 1, ease: 'power2.out' });
+  if (soundEnabled) playUIClick();
+}
+
+// Falling debris (ceramic shards / glass splinters) that settle on the desk
+function spawnDebris(origin, color, count) {
+  for (let i = 0; i < count; i++) {
+    const size = 0.015 + Math.random() * 0.025;
+    const geo = new THREE.TetrahedronGeometry(size);
+    const mat = new THREE.MeshStandardMaterial({ color: color, roughness: 0.35, metalness: 0.1, transparent: true, opacity: 1 });
+    const shard = new THREE.Mesh(geo, mat);
+    shard.position.copy(origin);
+    scene.add(shard);
+    const vx = (Math.random() - 0.5) * 0.7;
+    const vz = (Math.random() - 0.5) * 0.7;
+    gsap.to(shard.position, { x: origin.x + vx, z: origin.z + vz, duration: 0.9, ease: 'power1.out' });
+    gsap.to(shard.position, { y: -0.8, duration: 0.9, ease: 'bounce.out' });
+    gsap.to(shard.rotation, { x: Math.random() * 6, y: Math.random() * 6, z: Math.random() * 6, duration: 0.9 });
+    gsap.to(mat, { opacity: 0, duration: 1.2, delay: 0.8, onComplete: () => {
+      scene.remove(shard); geo.dispose(); mat.dispose();
+    }});
+  }
+}
+
+// Spreading coffee puddle on the desk surface
+function spawnCoffeeSpill(origin) {
+  const geo = new THREE.CircleGeometry(0.02, 40);
+  const mat = new THREE.MeshPhysicalMaterial({ color: 0x2a1508, roughness: 0.08, metalness: 0.0, clearcoat: 1.0, clearcoatRoughness: 0.0, transparent: true, opacity: 0.92, side: THREE.DoubleSide });
+  const puddle = new THREE.Mesh(geo, mat);
+  puddle.rotation.x = -Math.PI / 2;
+  puddle.position.set(origin.x + 0.06, -0.82, origin.z + 0.05);
+  scene.add(puddle);
+  gsap.to(puddle.scale, { x: 13, y: 13, duration: 1.4, ease: 'power2.out' });
+}
+
+function clickMug(root) {
+  if (mugState.broken) return;
+  mugState.clicks++;
+  if (mugState.clicks >= 5) {
+    // BREAK on the 5th click: topple, shed shards, spill coffee
+    mugState.broken = true;
+    const hb = root.userData.home;
+    gsap.killTweensOf(root.rotation);
+    gsap.to(root.rotation, { z: hb.rz + Math.PI / 2.2, x: hb.rx + 0.25, duration: 0.5, ease: 'bounce.out' });
+    gsap.to(root.position, { y: hb.py - 0.06, duration: 0.5, ease: 'bounce.out' });
+    if (mugLiquid) {
+      mugLiquid.material.transparent = true;
+      gsap.to(mugLiquid.material, { opacity: 0, duration: 0.3 });
+    }
+    const wp = root.getWorldPosition(new THREE.Vector3());
+    spawnCoffeeSpill(wp);
+    spawnDebris(wp, 0xece6df, 7);
+    if (soundEnabled) playGlassCrack();
+    return;
+  }
+  // SHAKE
+  const h = root.userData.home;
+  gsap.killTweensOf(root.rotation);
+  gsap.timeline()
+    .to(root.rotation, { z: h.rz + 0.14, duration: 0.05 })
+    .to(root.rotation, { z: h.rz - 0.12, duration: 0.05 })
+    .to(root.rotation, { z: h.rz + 0.07, duration: 0.05 })
+    .to(root.rotation, { z: h.rz, duration: 0.12, ease: 'power2.out' });
+  if (soundEnabled) playUIClick();
+}
+
+function startLampFlicker() {
+  lampState.flickering = true;
+  lampFlickerInterval = setInterval(() => {
+    if (!deskLightBulb || lampState.broken) return;
+    const hot = Math.random() < 0.55;
+    deskLightBulb.intensity = hot ? 8 + Math.random() * 8 : 0.4;
+    if (bulbGlow) bulbGlow.material.color.setScalar(hot ? 1 : 0.25);
+  }, 75);
+}
+
+function shatterBulb() {
+  lampState.broken = true;
+  if (lampFlickerInterval) { clearInterval(lampFlickerInterval); lampFlickerInterval = null; }
+  if (deskLightBulb) gsap.to(deskLightBulb, { intensity: 0, duration: 0.1 });
+  const bp = bulbGlow ? bulbGlow.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3(-2.16, -0.1, 0.45);
+  spawnDebris(bp, 0xfff2cc, 10);
+  if (bulbGlow) bulbGlow.visible = false;
+  if (soundEnabled) playGlassCrack();
+}
+
+function clickLamp(root) {
+  if (lampState.broken) return;
+  lampState.clicks++;
+  const h = root.userData.home;
+  gsap.killTweensOf(root.rotation);
+  gsap.timeline()
+    .to(root.rotation, { z: h.rz + 0.10, duration: 0.05 })
+    .to(root.rotation, { z: h.rz - 0.08, duration: 0.05 })
+    .to(root.rotation, { z: h.rz, duration: 0.14, ease: 'elastic.out(1, 0.5)' });
+  if (lampState.clicks === 4 && !lampState.flickering) startLampFlicker();
+  if (lampState.clicks >= 6) shatterBulb();
+  if (soundEnabled) playUIClick();
+}
+
+// Procedural shattered-glass crack pattern radiating from the impact point
+function makeCrackCanvas(w, h, ix, iy) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, w, h);
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = 'rgba(210,225,255,0.85)';
+
+  const spokes = 9 + Math.floor(Math.random() * 5);
+  for (let i = 0; i < spokes; i++) {
+    const ang = (i / spokes) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+    let x = ix, y = iy;
+    const segs = 4 + Math.floor(Math.random() * 4);
+    const len = Math.min(w, h) * (0.25 + Math.random() * 0.4);
+    ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(x, y);
+    for (let s = 0; s < segs; s++) {
+      x += Math.cos(ang) * (len / segs) + (Math.random() - 0.5) * 14;
+      y += Math.sin(ang) * (len / segs) + (Math.random() - 0.5) * 14;
+      ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  // concentric fracture rings
+  ctx.lineWidth = 1.0;
+  for (let r = 16; r < Math.min(w, h) * 0.4; r += 20 + Math.random() * 18) {
+    ctx.beginPath();
+    for (let a = 0; a <= Math.PI * 2 + 0.1; a += 0.35) {
+      const rr = r + (Math.random() - 0.5) * 9;
+      const x = ix + Math.cos(a) * rr, y = iy + Math.sin(a) * rr;
+      if (a === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  // bright impact core
+  const grd = ctx.createRadialGradient(ix, iy, 0, ix, iy, 34);
+  grd.addColorStop(0, 'rgba(255,255,255,0.95)');
+  grd.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = grd;
+  ctx.beginPath(); ctx.arc(ix, iy, 34, 0, Math.PI * 2); ctx.fill();
+  return c;
+}
+
+function crackMonitor(screen, worldPoint) {
+  const info = screen.userData.monitor || { w: 1.5, h: 1.0 };
+  const local = screen.worldToLocal(worldPoint.clone());
+  const cw = 512;
+  const ch = Math.max(96, Math.round(512 * (info.h / info.w)));
+  const ix = (local.x / info.w + 0.5) * cw;
+  const iy = (0.5 - local.y / info.h) * ch;
+  const tex = new THREE.CanvasTexture(makeCrackCanvas(cw, ch, ix, iy));
+  const overlay = new THREE.Mesh(
+    new THREE.PlaneGeometry(info.w, info.h),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 1, depthWrite: false })
+  );
+  overlay.position.set(screen.position.x, screen.position.y, screen.position.z + 0.02);
+  screen.parent.add(overlay);
+  if (soundEnabled) playGlassCrack();
+  gsap.to(overlay.material, { opacity: 0, duration: 2.6, ease: 'power2.in', onComplete: () => {
+    screen.parent.remove(overlay);
+    overlay.geometry.dispose(); overlay.material.dispose(); tex.dispose();
+  }});
+}
+
 filmCanvas.addEventListener('click', (e) => {
   if (!renderer || !camera) return;
 
@@ -2131,29 +2944,33 @@ filmCanvas.addEventListener('click', (e) => {
   const raycaster = new THREE.Raycaster();
   raycaster.setFromCamera(mouse, camera);
 
-  // Check keypress click
+  // 1) Keyboard keys depress individually
   const keyIntersects = raycaster.intersectObjects(keysGroup.children);
   if (keyIntersects.length > 0) {
     const keyMesh = keyIntersects[0].object;
-    // Animate key depression
     const originalY = keyMesh.position.y;
-    gsap.to(keyMesh.position, {
-      y: originalY - 0.018,
-      duration: 0.05,
-      yoyo: true,
-      repeat: 1,
-      ease: "power1.inOut"
-    });
+    gsap.to(keyMesh.position, { y: originalY - 0.018, duration: 0.05, yoyo: true, repeat: 1, ease: 'power1.inOut' });
     if (soundEnabled) playKeyboardClack();
     return;
   }
 
-  // Check desk surface click
-  if (deskMesh) {
-    const deskIntersects = raycaster.intersectObject(deskMesh);
-    if (deskIntersects.length > 0) {
-      spawn3DRipple(deskIntersects[0].point);
+  // 2) Everything else — first recognised target along the ray wins
+  const hits = raycaster.intersectObjects(scene.children, true);
+  for (const hit of hits) {
+    const root = findClickRoot(hit.object);
+    if (root) {
+      const kind = root.userData.clickKind;
+      if (kind === 'mug') clickMug(root);
+      else if (kind === 'lamp') clickLamp(root);
+      else if (kind === 'monitor') crackMonitor(root, hit.point);
+      else if (kind === 'notepad') { drawNotepadPencil(hit.uv); if (soundEnabled) playUIClick(); }
+      else nudgePush(root);
+      return;
+    }
+    if (hit.object === deskMesh) {
+      spawn3DRipple(hit.point);
       if (soundEnabled) playUIClick();
+      return;
     }
   }
 });
@@ -2217,7 +3034,13 @@ document.addEventListener('mousemove', (e) => {
 ══════════════════════════════════ */
 const reviewBtn = $('reviewBtn');
 if (reviewBtn) {
-  reviewBtn.addEventListener('click', () => {
+  reviewBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    const workSection = document.getElementById('work');
+    if (workSection) {
+      if (lenis) lenis.scrollTo(workSection, { offset: -40, duration: 1.4 });
+      else workSection.scrollIntoView({ behavior: 'smooth' });
+    }
     if (!audioCtx) initAudio();
     if (soundEnabled) {
       // Success chime: C major arpeggio
@@ -2264,3 +3087,166 @@ if (firstChapter) {
 
 console.log('%c⚡ EZZ TANTAWY PORTFOLIO', 'color:#FF8C00;font-size:16px;font-weight:bold;');
 console.log('%cScroll-driven cinematic portfolio — built with vanilla JS + Web Audio API', 'color:#888;font-size:12px;');
+
+/* ══════════════════════════════════
+   CURSOR-WEIGHT PANELS · PRESS-X CHAOS · LIVING ROADMAP
+══════════════════════════════════ */
+(function () {
+  const finePointer = window.matchMedia && window.matchMedia('(pointer: fine)').matches;
+
+  // --- Cursor-weight panel tilt (desktop) ---
+  if (finePointer) {
+    const SEL = '.about-card, .contact-card, .process-step, .stat-card';
+    let cur = null;
+    const reset = el => { if (el) { el.style.removeProperty('--tilt-rx'); el.style.removeProperty('--tilt-ry'); el.classList.remove('weight-tilting'); } };
+    document.addEventListener('mousemove', (e) => {
+      const el = e.target.closest(SEL);
+      if (el !== cur) { reset(cur); cur = el; }
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const px = (e.clientX - r.left) / r.width - 0.5;
+      const py = (e.clientY - r.top) / r.height - 0.5;
+      el.style.setProperty('--tilt-ry', (px * 9).toFixed(2) + 'deg');
+      el.style.setProperty('--tilt-rx', (-py * 9).toFixed(2) + 'deg');
+      el.classList.add('weight-tilting');
+    }, { passive: true });
+  }
+
+  // --- Living roadmap: scroll fill + cursor proximity + gyro tilt ---
+  const proc = document.querySelector('.process-section');
+  const steps = [...document.querySelectorAll('.process-step')];
+  if (proc && steps.length) {
+    const onRoad = () => {
+      const r = proc.getBoundingClientRect();
+      const vh = window.innerHeight;
+      const prog = Math.max(0, Math.min(1, (vh - r.top) / (r.height + vh * 0.4)));
+      proc.style.setProperty('--road-progress', prog.toFixed(3));
+    };
+    window.addEventListener('scroll', onRoad, { passive: true });
+    window.addEventListener('resize', onRoad);
+    onRoad();
+    if (finePointer) {
+      proc.addEventListener('mousemove', (e) => {
+        let best = null, bestD = Infinity;
+        steps.forEach(s => {
+          const r = s.getBoundingClientRect();
+          const d = Math.hypot(e.clientX - (r.left + r.width / 2), e.clientY - (r.top + r.height / 2));
+          if (d < bestD) { bestD = d; best = s; }
+        });
+        steps.forEach(s => s.classList.toggle('road-active', s === best));
+      });
+      proc.addEventListener('mouseleave', () => steps.forEach(s => s.classList.remove('road-active')));
+    }
+    window.addEventListener('deviceorientation', (e) => {
+      if (e.gamma == null) return;
+      const g = Math.max(-20, Math.min(20, e.gamma)) / 20;
+      proc.style.setProperty('--road-tilt', (g * 6).toFixed(2) + 'deg');
+    }, true);
+  }
+
+  // --- Press-X destruction (desktop) / double-tap (mobile) ---
+  let active = false; const stored = [];
+  const wrap = document.querySelector('.canvas-wrapper');
+  function destroy() {
+    if (active) return; active = true;
+    if (wrap) wrap.classList.add('chaos-shake');
+    document.querySelectorAll('.about-card, .project-card, .process-step, .contact-card, .request-card, .skill-orbit, .filter-bar, .proxi-inner').forEach(el => {
+      stored.push({ el, t: el.style.transform, o: el.style.opacity, tr: el.style.transition });
+      el.style.transition = 'transform 0.7s cubic-bezier(.2,.85,.25,1), opacity 0.7s';
+      const dx = (Math.random() - 0.5) * window.innerWidth * 0.55;
+      const dy = (Math.random() - 0.5) * window.innerHeight * 0.45;
+      el.style.transform = `translate(${dx.toFixed(0)}px, ${dy.toFixed(0)}px) rotate(${((Math.random() - 0.5) * 60).toFixed(0)}deg)`;
+      el.style.opacity = '0.82';
+    });
+    document.querySelectorAll('h1, h2').forEach(h => {
+      if (h.dataset.shattered) return;
+      h.dataset.shattered = '1';
+      h.dataset.orig = h.innerHTML;
+      h.innerHTML = h.textContent.split('').map(ch => ch === ' ' ? ' ' : `<span class="shard" style="--sx:${((Math.random() - 0.5) * 240).toFixed(0)}px;--sy:${((Math.random() - 0.5) * 200).toFixed(0)}px;--sr:${((Math.random() - 0.5) * 140).toFixed(0)}deg">${ch}</span>`).join('');
+    });
+    document.body.classList.add('chaos-on');
+    showRestore();
+  }
+  function restore() {
+    if (!active) return; active = false;
+    if (wrap) wrap.classList.remove('chaos-shake');
+    document.body.classList.remove('chaos-on');
+    stored.forEach(({ el, t, o }) => { el.style.transform = t; el.style.opacity = o; });
+    setTimeout(() => stored.forEach(({ el, tr }) => { el.style.transition = tr; }), 720);
+    stored.length = 0;
+    document.querySelectorAll('[data-shattered]').forEach(h => { h.innerHTML = h.dataset.orig; delete h.dataset.shattered; delete h.dataset.orig; });
+    hideRestore();
+  }
+  let rbtn;
+  function showRestore() {
+    if (!rbtn) { rbtn = document.createElement('button'); rbtn.className = 'chaos-restore-btn interactive'; rbtn.textContent = 'Restore ↺'; rbtn.addEventListener('click', restore); document.body.appendChild(rbtn); }
+    rbtn.classList.add('visible');
+  }
+  function hideRestore() { if (rbtn) rbtn.classList.remove('visible'); }
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'x' && e.key !== 'X') return;
+    const t = (document.activeElement && document.activeElement.tagName) || '';
+    if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') return;
+    active ? restore() : destroy();
+  });
+  let lastTap = 0;
+  document.addEventListener('touchend', () => { const n = Date.now(); if (n - lastTap < 320) (active ? restore() : destroy()); lastTap = n; }, { passive: true });
+
+  const hint = document.createElement('div');
+  hint.className = 'fun-hint';
+  hint.innerHTML = '<span class="d">Press <strong>X</strong> for chaos</span><span class="m">Double-tap for chaos</span>';
+  document.body.appendChild(hint);
+})();
+
+/* ══════════════════════════════════
+   PORTFOLIO HOVER-AUTOPLAY PREVIEWS (desktop)
+══════════════════════════════════ */
+(function () {
+  if (window.matchMedia && !window.matchMedia('(pointer: fine)').matches) return;
+  document.querySelectorAll('.project-card').forEach(card => {
+    const idx = parseInt(card.dataset.index);
+    const vfile = PROJECT_VIDEO[idx];
+    if (!vfile) return;
+    const thumb = card.querySelector('.project-thumb');
+    if (!thumb) return;
+    let vid = null;
+    card.addEventListener('mouseenter', () => {
+      if (vid) return;
+      vid = document.createElement('video');
+      vid.className = 'thumb-preview';
+      vid.src = mediaURL(vfile, 'sd');
+      vid.muted = true; vid.loop = true; vid.playsInline = true; vid.preload = 'none';
+      thumb.appendChild(vid);
+      vid.play().catch(() => {});
+      card.classList.add('has-preview');
+    });
+    card.addEventListener('mouseleave', () => {
+      card.classList.remove('has-preview');
+      if (vid) { vid.pause(); vid.remove(); vid = null; }
+    });
+  });
+})();
+
+/* ══════════════════════════════════
+   MOBILE: dismissible 3D scene HUD
+══════════════════════════════════ */
+(function () {
+  if (!window.matchMedia || !window.matchMedia('(max-width: 768px)').matches) return;
+  const btn = document.createElement('button');
+  btn.className = 'hud-toggle interactive';
+  btn.setAttribute('aria-label', 'Toggle scene overlay');
+  btn.innerHTML = '<span>Hide overlay</span>';
+  document.body.appendChild(btn);
+  btn.addEventListener('click', () => {
+    const hidden = document.body.classList.toggle('hud-hidden');
+    btn.querySelector('span').textContent = hidden ? 'Show overlay' : 'Hide overlay';
+  });
+  const hero = document.querySelector('.cinematic-hero');
+  if (hero && 'IntersectionObserver' in window) {
+    new IntersectionObserver((entries) => {
+      entries.forEach(e => btn.classList.toggle('visible', e.isIntersecting));
+    }, { threshold: 0.05 }).observe(hero);
+  } else {
+    btn.classList.add('visible');
+  }
+})();

@@ -200,6 +200,7 @@ let deskMesh;
 let fan1, fan2, fan3, rearFan, cpuFan, psuFan, fanBladeMat;
 let dustParticles;
 let steamParticles = [];
+let steamOrigin = new THREE.Vector3(-1.4, -0.58, 0.8);
 let deskLightBulb;
 let pcRigLight;
 
@@ -213,6 +214,10 @@ let lampFlickerInterval = null;
 let notepadMesh, notepadCanvas, notepadCtx, notepadTexture;
 let todoCanvas, todoCtx, todoTexture;
 let notepadLast = null;
+let isDrawingNote = false;
+let noteHasDrawing = false;
+let noteAttachEnabled = true;
+let suppressNextClick = false;
 let fanRings = [];
 let speakerRings = [];
 // procedural parts we hide once the real GLB models load
@@ -1024,6 +1029,7 @@ function drawNotepadPencil(uv) {
   }
   notepadLast = { x, y, t: now };
   notepadTexture.needsUpdate = true;
+  noteHasDrawing = true;
 }
 
 // Build a cylinder spanning two points (for lamp arms, cables, etc.)
@@ -1052,10 +1058,11 @@ function addFanRing(fanGroup) {
 ══════════════════════════════════ */
 const MODEL_CONFIG = {
   keyboard: { file: 'Keyboard.glb',  pos: [0, -0.822, 0.85],   fit: 'width',  size: 1.55, rotY: -Math.PI / 2 },
-  mouse:    { file: 'mouse.glb',     pos: [1.12, -0.822, 0.86], fit: 'depth',  size: 0.24, rotY: 0 },
-  pc:       { file: 'PC case.glb',   pos: [2.05, -1.81, -0.3],  fit: 'height', size: 1.4,  rotY: 0 },
-  speaker:  { file: 'speaker.glb',   posL: [-1.0, -0.822, 0.22], posR: [1.0, -0.822, 0.22], fit: 'height', size: 0.42, rotY: 0 },
-  lamp:     { file: 'Desk lamp.glb', pos: [-2.0, -0.822, 1.0],  fit: 'height', size: 0.92, rotY: 0 }
+  mouse:    { file: 'mouse.glb',     pos: [1.12, -0.822, 0.86], fit: 'depth',  size: 0.24, rotY: 0, yNudge: 0.004 },
+  pc:       { file: 'PC case.glb',   pos: [2.05, -1.81, -0.3],  fit: 'height', size: 1.4,  rotY: -Math.PI / 2, yNudge: -0.05 },
+  speaker:  { file: 'speaker.glb',   posL: [-1.0, -0.822, 0.22], posR: [1.0, -0.822, 0.22], fit: 'height', size: 0.42, rotY: -Math.PI / 2 },
+  lamp:     { file: 'Desk lamp.glb', pos: [-2.0, -0.822, 1.0],  fit: 'height', size: 0.92, rotY: 0 },
+  mug:      { file: 'Mug.glb',       pos: [-1.4, -0.822, 0.8],  fit: 'height', size: 0.28, rotY: 0 }
 };
 
 function fitAndPlace(root, cfg, pos) {
@@ -1073,6 +1080,7 @@ function fitAndPlace(root, cfg, pos) {
   root.position.x += pos[0] - c.x;
   root.position.z += pos[2] - c.z;
   root.position.y += pos[1] - box.min.y;   // seat the base on the surface
+  root.position.y += cfg.yNudge || 0;      // manual fine-tune (avoids z-fighting / matches feedback)
   root.traverse(o => {
     if (o.isMesh) {
       o.castShadow = true; o.receiveShadow = true;
@@ -1080,6 +1088,7 @@ function fitAndPlace(root, cfg, pos) {
     }
   });
   scene.add(root);
+  root.updateMatrixWorld(true); // keep world transforms fresh for any immediate post-placement bbox reads
   return root;
 }
 
@@ -1123,6 +1132,31 @@ function loadModels() {
   get(MODEL_CONFIG.lamp, (g) => {
     tagPush(fitAndPlace(g.scene, MODEL_CONFIG.lamp, MODEL_CONFIG.lamp.pos));
     disableProc([lampGroup]);
+  });
+  get(MODEL_CONFIG.mug, (g) => {
+    const root = fitAndPlace(g.scene, MODEL_CONFIG.mug, MODEL_CONFIG.mug.pos);
+    root.userData.clickKind = 'mug';
+    root.userData.home = {
+      px: root.position.x, py: root.position.y, pz: root.position.z,
+      rx: root.rotation.x, ry: root.rotation.y, rz: root.rotation.z
+    };
+    // The mug's two meshes are both named "...Coffee_0_*" — the liquid surface is
+    // the flat one (near-zero local bbox height); the body is the tall one. Find it
+    // by shape rather than name so the steam origin tracks the real coffee surface.
+    let coffeeMesh = null, flattest = Infinity;
+    root.traverse(o => {
+      if (o.isMesh) {
+        const b = new THREE.Box3().setFromObject(o);
+        const h = b.max.y - b.min.y;
+        if (h < flattest) { flattest = h; coffeeMesh = o; }
+      }
+    });
+    if (coffeeMesh) {
+      mugLiquid = coffeeMesh; // clickMug()'s break-fade now targets the real coffee surface
+      const cb = new THREE.Box3().setFromObject(coffeeMesh);
+      steamOrigin.set((cb.min.x + cb.max.x) / 2, cb.max.y, (cb.min.z + cb.max.z) / 2);
+    }
+    disableProc([mugGroup]);
   });
 }
 
@@ -1757,15 +1791,24 @@ function initThree() {
 
   scene.add(mugGroup);
 
-  // Steam particle array (centered above relocated mug)
-  for (let i = 0; i < 6; i++) {
+  // Steam particle array — many overlapping, phase-staggered wisps read as one continuous
+  // rising trail (hot liquid curls upward steadily) rather than the old discrete "puffs".
+  const STEAM_COUNT = 18, STEAM_LIFE = 1700;
+  for (let i = 0; i < STEAM_COUNT; i++) {
     const steamPart = new THREE.Mesh(
-      new THREE.SphereGeometry(0.012 + Math.random() * 0.01, 8, 8),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.15 + Math.random() * 0.2 })
+      new THREE.SphereGeometry(0.01 + Math.random() * 0.006, 8, 8),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 })
     );
-    steamPart.position.set(-1.4 + (Math.random() - 0.5) * 0.05, -0.58 + Math.random() * 0.4, 0.8 + (Math.random() - 0.5) * 0.05);
+    steamPart.scale.set(1, 1.8, 1); // elongated into a soft wisp rather than a round puff
+    steamPart.position.copy(steamOrigin);
     scene.add(steamPart);
-    steamParticles.push({ mesh: steamPart, speed: 0.003 + Math.random() * 0.003, born: Date.now() });
+    steamParticles.push({
+      mesh: steamPart,
+      life: STEAM_LIFE,
+      born: Date.now() - Math.random() * STEAM_LIFE, // staggered phase → continuous from frame 1
+      phase: Math.random() * Math.PI * 2,
+      driftAmp: 0.016 + Math.random() * 0.018
+    });
   }
 
   // ── REGISTER INTERACTIVE CLICK TARGETS ──
@@ -1860,19 +1903,15 @@ function initThree() {
   dustParticles = new THREE.Points(pGeom, pMat);
   scene.add(dustParticles);
 
-  // Setup GSAP Camera Interpolation Snapping Timeline
+  // Setup GSAP Camera Interpolation Timeline — continuous scrub, no snapping.
+  // The camera must track scroll position 1:1 (wheel or touch) with zero
+  // discrete stops; only the scrub value below adds a touch of smoothing lag.
   const tl = gsap.timeline({
     scrollTrigger: {
       trigger: ".cinematic-hero",
       start: "top top",
       end: "bottom bottom",
-      scrub: 1.0,
-      snap: {
-        snapTo: [0, 0.2, 0.4, 0.6, 0.8, 1.0],
-        duration: { min: 0.3, max: 0.6 },
-        delay: 0.05,
-        ease: "power2.out"
-      },
+      scrub: 0.5,
       onUpdate: (self) => {
         scrollProgressPct = self.progress;
         drawLeftScreen(scrollProgressPct);
@@ -1935,18 +1974,24 @@ function animate() {
     dustParticles.geometry.attributes.position.needsUpdate = true;
   }
 
-  // 4. Mug steam rising (resetting above the relocated mug at -1.4, 0.8)
+  // 4. Mug steam — a continuous rising, curling trail (tracks steamOrigin, which the
+  //    real GLB mug's coffee surface sets once it loads) instead of discrete puffs.
   steamParticles.forEach(part => {
     if (mugState.broken) { part.mesh.material.opacity = 0; return; }
-    part.mesh.position.y += part.speed;
     const age = Date.now() - part.born;
-    part.mesh.material.opacity = Math.max(0, 0.3 * (1 - age / 1200));
-
-    if (age > 1200) {
-      part.mesh.position.set(-1.4 + (Math.random() - 0.5) * 0.05, -0.58, 0.8 + (Math.random() - 0.5) * 0.05);
+    if (age > part.life || age < 0) {
       part.born = Date.now();
-      part.mesh.material.opacity = 0.3;
+      part.phase = Math.random() * Math.PI * 2;
+      return;
     }
+    const t = age / part.life; // 0 → 1 across the rise
+    const rise = t * 0.4;
+    const sway = Math.sin(t * Math.PI * 2.1 + part.phase) * part.driftAmp * t;
+    const drift = Math.cos(t * Math.PI * 1.6 + part.phase) * part.driftAmp * 0.6 * t;
+    part.mesh.position.set(steamOrigin.x + sway, steamOrigin.y + rise, steamOrigin.z + drift);
+    const growth = 1 + t * 1.7;
+    part.mesh.scale.set(growth, growth * 1.8, growth);
+    part.mesh.material.opacity = Math.sin(t * Math.PI) * 0.22; // smooth fade in/out, never pops
   });
 
   // 5. Parallax Camera target calculating
@@ -2576,6 +2621,9 @@ const mailConfirmationText = document.getElementById("mailConfirmationText");
 const REQUEST_EMAIL = "contact@ezz-tantawy.org";
 const requestAddon = document.getElementById("requestAddon");
 const longTermToggle = document.getElementById("longTermToggle");
+const noteAttach = document.getElementById("noteAttach");
+const noteAttachThumb = document.getElementById("noteAttachThumb");
+const noteAttachToggle = document.getElementById("noteAttachToggle");
 let selectedRequestCategory = "";
 let selectedRequestType = "Long form - Long-Form Video Editing";
 let longTermContract = false;
@@ -2713,6 +2761,7 @@ function selectRequestType(type) {
   updateAutoRequestText(option);
   sendRequestBtn.querySelector("span").textContent = "Send request";
   window.setTimeout(() => requestDetails.focus({ preventScroll: true }), 260);
+  updateNoteAttachUI();
   if (soundEnabled) playUIClick();
 }
 
@@ -2728,11 +2777,50 @@ longTermToggle?.addEventListener("click", () => {
   if (soundEnabled) playUIClick();
 });
 
+/* ══════════════════════════════════
+   WRITTEN NOTE ATTACHMENT
+   The doodle on the 3D notebook (notepadCanvas) can ride along with a request.
+   Gmail/Outlook compose links can't accept a real file attachment (no such API
+   exists for mailto/web-compose deep links) — so the practical equivalent is:
+   auto-download the doodle as "Written note.png" and mention it in the email
+   body, right as the user picks an email app. They can turn it off first.
+══════════════════════════════════ */
+function updateNoteAttachUI() {
+  if (!noteAttach) return;
+  if (noteHasDrawing && notepadCanvas) {
+    noteAttach.style.display = "flex";
+    noteAttach.setAttribute("aria-hidden", "false");
+    if (noteAttachThumb) noteAttachThumb.src = notepadCanvas.toDataURL("image/png");
+  } else {
+    noteAttach.style.display = "none";
+    noteAttach.setAttribute("aria-hidden", "true");
+  }
+}
+
+noteAttachToggle?.addEventListener("click", () => {
+  noteAttachEnabled = !noteAttachEnabled;
+  noteAttachToggle.setAttribute("aria-pressed", String(noteAttachEnabled));
+  if (soundEnabled) playUIClick();
+});
+
+function downloadWrittenNote() {
+  if (!notepadCanvas) return;
+  const a = document.createElement("a");
+  a.href = notepadCanvas.toDataURL("image/png");
+  a.download = "Written note.png";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 function buildEmailUrls() {
   const type = requestTypeSelect.value || selectedRequestType || "General Project";
   const subject = longTermContract ? `Request | ${type} | Long-term contract |` : `Request | ${type} |`;
   let body = requestDetails.value.trim();
   if (longTermContract && !/long-term collaboration/i.test(body)) body += LONG_TERM_BLOCK;
+  if (noteHasDrawing && noteAttachEnabled) {
+    body += "\n\n(P.S. I sketched a quick note on your site — it downloaded as \"Written note.png\", attaching it here.)";
+  }
   return {
     gmail: `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(REQUEST_EMAIL)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
     outlook: `https://outlook.live.com/mail/0/deeplink/compose?to=${encodeURIComponent(REQUEST_EMAIL)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
@@ -2750,10 +2838,14 @@ function sendProjectRequest(provider) {
   const urls = buildEmailUrls();
   const labels = { gmail: "Gmail", outlook: "Outlook" };
   const selectedProvider = provider in urls ? provider : "gmail";
+  if (noteHasDrawing && noteAttachEnabled) downloadWrittenNote();
   const openedWindow = window.open(urls[selectedProvider], "_blank");
   if (openedWindow) openedWindow.opener = null;
   if (mailConfirmationText) {
-    mailConfirmationText.textContent = `${labels[selectedProvider]} should now open your prepared request in a new tab or mail app. Please review the draft and press send when you are ready. If no window appeared, allow popups and choose the email app again.`;
+    const noteLine = (noteHasDrawing && noteAttachEnabled)
+      ? " Your written note also downloaded as \"Written note.png\" — attach it to the email before sending."
+      : "";
+    mailConfirmationText.textContent = `${labels[selectedProvider]} should now open your prepared request in a new tab or mail app. Please review the draft and press send when you are ready. If no window appeared, allow popups and choose the email app again.${noteLine}`;
   }
   mailConfirmation.style.display = "flex";
   mailConfirmation.classList.add("open");
@@ -3110,6 +3202,7 @@ function crackMonitor(screen, worldPoint) {
 
 filmCanvas.addEventListener('click', (e) => {
   if (!renderer || !camera) return;
+  if (suppressNextClick) { suppressNextClick = false; return; } // notepad drag/tap already handled it
 
   const rect = filmCanvas.getBoundingClientRect();
   const mouse = new THREE.Vector2(
@@ -3146,7 +3239,6 @@ filmCanvas.addEventListener('click', (e) => {
         if (gameActive && root.userData.isCenter) gameClickAt(hit.uv);
         else crackMonitor(root, hit.point);
       }
-      else if (kind === 'notepad') { drawNotepadPencil(hit.uv); if (soundEnabled) playUIClick(); }
       else if (kind === 'keyboard') {
         gsap.killTweensOf(root.position);
         const y0 = (root.userData.home && root.userData.home.py != null) ? root.userData.home.py : root.position.y;
@@ -3165,6 +3257,85 @@ filmCanvas.addEventListener('click', (e) => {
     }
   }
 });
+
+/* ══════════════════════════════════
+   NOTEPAD FREEHAND DRAWING (pointer drag)
+   Continuous drag/write instead of tap-to-connect-dots. Owns the gesture from
+   pointerdown through pointerup so mouse drag AND touch drag both work, and
+   suspends page-scroll only while the drag is actually happening on the page.
+══════════════════════════════════ */
+function raycastNotepad(clientX, clientY) {
+  if (!notepadMesh || !camera) return null;
+  const rect = filmCanvas.getBoundingClientRect();
+  const mouse = new THREE.Vector2(
+    ((clientX - rect.left) / rect.width) * 2 - 1,
+    -((clientY - rect.top) / rect.height) * 2 + 1
+  );
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(mouse, camera);
+  const hits = raycaster.intersectObject(notepadMesh, false);
+  return hits.length ? hits[0] : null;
+}
+
+function commitNoteDrawing(e, hit) {
+  isDrawingNote = true;
+  suppressNextClick = true;
+  notepadLast = null; // start a fresh stroke, don't connect to an older one
+  filmCanvas.style.touchAction = 'none'; // this gesture writes on the page, not scrolls it
+  if (filmCanvas.setPointerCapture) filmCanvas.setPointerCapture(e.pointerId);
+  drawNotepadPencil(hit.uv);
+  if (soundEnabled) playUIClick();
+  e.preventDefault();
+}
+
+// While true, a touch gesture started on the notepad but hasn't moved enough yet to tell
+// a stationary "write" from a swipe-through "scroll" — see pointermove below.
+let notePendingDown = null;
+
+filmCanvas.addEventListener('pointerdown', (e) => {
+  if (!renderer || !camera) return;
+  const hit = raycastNotepad(e.clientX, e.clientY);
+  if (!hit) return;
+  if (e.pointerType === 'touch') {
+    // A scroll swipe can start on the notepad's screen area too. Don't claim the
+    // gesture (and don't block scroll) until the first move confirms it's a write.
+    notePendingDown = { x: e.clientX, y: e.clientY, id: e.pointerId };
+    return;
+  }
+  commitNoteDrawing(e, hit); // mouse drag never scrolls a Lenis page, safe to claim immediately
+});
+
+filmCanvas.addEventListener('pointermove', (e) => {
+  if (isDrawingNote) {
+    const hit = raycastNotepad(e.clientX, e.clientY);
+    if (hit) drawNotepadPencil(hit.uv);
+    else notepadLast = null; // pointer slid off the page — don't draw a line across the gap
+    e.preventDefault();
+    return;
+  }
+  if (notePendingDown && notePendingDown.id === e.pointerId) {
+    const dist = Math.hypot(e.clientX - notePendingDown.x, e.clientY - notePendingDown.y);
+    if (dist > 6) { notePendingDown = null; return; } // travelled — this is a scroll swipe, let it through
+    const hit = raycastNotepad(e.clientX, e.clientY);
+    if (!hit) { notePendingDown = null; return; }
+    notePendingDown = null;
+    commitNoteDrawing(e, hit);
+  }
+});
+
+function endNoteDrawing(e) {
+  notePendingDown = null;
+  if (!isDrawingNote) return;
+  isDrawingNote = false;
+  notepadLast = null;
+  filmCanvas.style.touchAction = '';
+  if (e && e.pointerId != null && filmCanvas.hasPointerCapture && filmCanvas.hasPointerCapture(e.pointerId)) {
+    filmCanvas.releasePointerCapture(e.pointerId);
+  }
+}
+filmCanvas.addEventListener('pointerup', endNoteDrawing);
+filmCanvas.addEventListener('pointercancel', endNoteDrawing);
+filmCanvas.addEventListener('pointerleave', endNoteDrawing);
 
 
 
@@ -3258,7 +3429,7 @@ if (reviewBtn) {
 /* ══════════════════════════════════
    NAV LINKS audio
 ══════════════════════════════════ */
-$$('.nav-link, .nav-cta, .contact-card, .filter-btn').forEach(el => {
+$$('.island-links a, .island-cta, .contact-card, .filter-btn').forEach(el => {
   el.addEventListener('click', () => {
     if (soundEnabled) playUIClick();
   });

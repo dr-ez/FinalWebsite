@@ -215,6 +215,8 @@ let todoCanvas, todoCtx, todoTexture;
 let notepadLast = null;
 let fanRings = [];
 let speakerRings = [];
+// procedural parts we hide once the real GLB models load
+let kbBase, kbDeckPlate, kbGlow, knob, knobTop, radFanA, radFanB;
 
 // Dynamic Screen Canvases & Textures
 let canvasLeft, ctxLeft, textureLeft;
@@ -413,6 +415,7 @@ function drawLeftScreen(progress) {
 
 // 2. Draw Center Screen: Premiere Pro Workspace
 function drawCenterScreen(progress) {
+  if (gameActive) return;   // the mini-game owns the centre monitor while running
   ctxCenter.fillStyle = '#1e1e1e';
   ctxCenter.fillRect(0, 0, 1024, 576);
 
@@ -699,6 +702,146 @@ function spawn3DRipple(point) {
   });
 }
 
+/* ══════════════════════════════════
+   FLAPPY MINI-GAME (renders on the centre monitor)
+   Unlocked by tapping the 3D spacebar 5×
+══════════════════════════════════ */
+let gameActive = false, spaceClicks = 0, game = null;
+let gameHi = parseInt((window.localStorage && localStorage.getItem('flappyHi')) || '0', 10) || 0;
+const GAME_BTNS = [];
+
+function startGame() {
+  gameActive = true; spaceClicks = 0;
+  game = { y: 240, v: 0, pipes: [], t: 0, score: 0, dead: false, started: false };
+}
+function gameFlap() { if (game && !game.dead) { game.started = true; game.v = -7.2; } }
+window.startFlappy = startGame;   // hidden cheat: run startFlappy() in the console
+document.addEventListener('keydown', (e) => {
+  if (!gameActive) return;
+  if (e.key === ' ' || e.code === 'Space') {
+    const t = (document.activeElement && document.activeElement.tagName) || '';
+    if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') return;
+    e.preventDefault();
+    gameFlap();
+  }
+});
+function gameOver() {
+  if (!game || game.dead) return;
+  game.dead = true;
+  if (game.score > gameHi) { gameHi = game.score; if (window.localStorage) localStorage.setItem('flappyHi', String(gameHi)); }
+}
+function endGameToPremiere() {
+  gameActive = false; game = null; GAME_BTNS.length = 0;
+  drawCenterScreen(scrollProgressPct);
+}
+function gameClickAt(uv) {
+  if (!game) return;
+  const x = uv.x * canvasCenter.width, y = (1 - uv.y) * canvasCenter.height;
+  if (game.dead) {
+    for (const b of GAME_BTNS) {
+      if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+        if (b.id === 'again') startGame();
+        else if (b.id === 'back') endGameToPremiere();
+        else if (b.id === 'request') {
+          endGameToPremiere();
+          const c = document.getElementById('contact');
+          if (c) { if (typeof lenis !== 'undefined' && lenis) lenis.scrollTo(c, { offset: -40 }); else c.scrollIntoView({ behavior: 'smooth' }); }
+        }
+        return;
+      }
+    }
+  } else { gameFlap(); }
+}
+function gameRoundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+function drawGame() {
+  const ctx = ctxCenter, W = canvasCenter.width, H = canvasCenter.height;
+  const TITLE = 50, FLOOR = H - 26, BX = 300, BR = 24;
+
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#0a1018'); bg.addColorStop(1, '#0e1622');
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#11161f'; ctx.fillRect(0, 0, W, TITLE);
+  [['#ff5f57', 28], ['#febc2e', 54], ['#28c840', 80]].forEach(([c, x]) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x, TITLE / 2, 8, 0, Math.PI * 2); ctx.fill(); });
+  ctx.fillStyle = '#cfd2d6'; ctx.font = 'bold 17px "Space Mono", monospace'; ctx.textAlign = 'center';
+  ctx.fillText('flappy_ezz.exe  —  Premiere Pro stopped responding', W / 2, TITLE / 2 + 6);
+  ctx.textAlign = 'left';
+
+  if (game.started && !game.dead) {
+    game.t++;
+    game.v += 0.42; game.y += game.v;
+    if (game.t % 90 === 0) {
+      const gap = 172, m = 80;
+      const top = TITLE + m + Math.random() * (FLOOR - TITLE - gap - m * 2);
+      game.pipes.push({ x: W + 30, top, gap, passed: false });
+    }
+    game.pipes.forEach(p => p.x -= 3.6);
+    game.pipes = game.pipes.filter(p => p.x > -100);
+    game.pipes.forEach(p => { if (!p.passed && p.x + 64 < BX) { p.passed = true; game.score++; } });
+    if (game.y + BR > FLOOR || game.y - BR < TITLE + 6) gameOver();
+    game.pipes.forEach(p => { if (BX + BR > p.x && BX - BR < p.x + 70 && (game.y - BR < p.top || game.y + BR > p.top + p.gap)) gameOver(); });
+  }
+
+  game.pipes.forEach(p => {
+    const grd = ctx.createLinearGradient(p.x, 0, p.x + 70, 0);
+    grd.addColorStop(0, '#ff9a1f'); grd.addColorStop(1, '#cc5500');
+    ctx.fillStyle = grd;
+    ctx.fillRect(p.x, TITLE, 70, p.top - TITLE);
+    ctx.fillRect(p.x, p.top + p.gap, 70, FLOOR - (p.top + p.gap));
+    ctx.fillStyle = 'rgba(255,255,255,0.14)';
+    ctx.fillRect(p.x - 3, p.top - 16, 76, 16);
+    ctx.fillRect(p.x - 3, p.top + p.gap, 76, 16);
+  });
+
+  ctx.fillStyle = '#1a2230'; ctx.fillRect(0, FLOOR, W, H - FLOOR);
+  ctx.fillStyle = 'rgba(255,140,0,0.5)'; ctx.fillRect(0, FLOOR, W, 3);
+
+  ctx.save();
+  ctx.translate(BX, game.y);
+  ctx.rotate(Math.max(-0.5, Math.min(1.0, game.v * 0.05)));
+  ctx.fillStyle = '#fff'; ctx.strokeStyle = '#ff8c00'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(0, 0, BR, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#ff8c00'; ctx.beginPath(); ctx.moveTo(18, -2); ctx.lineTo(34, 3); ctx.lineTo(18, 9); ctx.fill();
+  ctx.fillStyle = '#11161f'; ctx.beginPath(); ctx.arc(9, -8, 4, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 46px "Outfit", sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(String(game.score), W / 2, TITLE + 70);
+  if (!game.started && !game.dead) {
+    ctx.font = 'bold 26px "Outfit", sans-serif'; ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillText('Tap the screen or press Space to fly', W / 2, H / 2 + 90);
+  }
+  ctx.textAlign = 'left';
+
+  if (game.dead) {
+    ctx.fillStyle = 'rgba(6,9,14,0.82)'; ctx.fillRect(0, TITLE, W, H - TITLE);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ff5f57'; ctx.font = 'bold 58px "Outfit", sans-serif';
+    ctx.fillText('YOU LOST', W / 2, 160);
+    ctx.fillStyle = '#cfd2d6'; ctx.font = '22px "Space Mono", monospace';
+    ctx.fillText(`Score ${game.score}   ·   Best ${gameHi}`, W / 2, 206);
+    GAME_BTNS.length = 0;
+    const opts = [['again', 'Try again'], ['request', 'Realize your vision →'], ['back', 'Back to Premiere']];
+    const bw = 380, bh = 54, gp = 16, top0 = 250;
+    opts.forEach(([id, text], i) => {
+      const bx = W / 2 - bw / 2, y = top0 + i * (bh + gp);
+      GAME_BTNS.push({ id, x: bx, y, w: bw, h: bh });
+      ctx.fillStyle = id === 'request' ? '#ff8c00' : 'rgba(255,255,255,0.08)';
+      gameRoundRect(ctx, bx, y, bw, bh, 12); ctx.fill();
+      ctx.strokeStyle = id === 'request' ? '#ff8c00' : 'rgba(255,255,255,0.22)'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.fillStyle = id === 'request' ? '#000' : '#fff'; ctx.font = 'bold 21px "Outfit", sans-serif';
+      ctx.fillText(text, W / 2, y + bh / 2 + 7);
+    });
+    ctx.textAlign = 'left';
+  }
+
+  textureCenter.needsUpdate = true;
+}
+
 // Procedural image-based-lighting environment (warm studio room) → real reflections
 function buildEnvironment(rndr) {
   const c = document.createElement('canvas');
@@ -903,6 +1046,86 @@ function addFanRing(fanGroup) {
   fanRings.push(mat.emissive);
 }
 
+/* ══════════════════════════════════
+   REAL GLB MODELS — replace procedural keyboard / mouse / PC / speaker / lamp.
+   Tweak pos / fit / size / rot* here if a model sits or faces wrong.
+══════════════════════════════════ */
+const MODEL_CONFIG = {
+  keyboard: { file: 'Keyboard.glb',  pos: [0, -0.822, 0.85],   fit: 'width',  size: 1.55, rotY: -Math.PI / 2 },
+  mouse:    { file: 'mouse.glb',     pos: [1.12, -0.822, 0.86], fit: 'depth',  size: 0.24, rotY: 0 },
+  pc:       { file: 'PC case.glb',   pos: [2.05, -1.81, -0.3],  fit: 'height', size: 1.4,  rotY: 0 },
+  speaker:  { file: 'speaker.glb',   posL: [-1.0, -0.822, 0.22], posR: [1.0, -0.822, 0.22], fit: 'height', size: 0.42, rotY: 0 },
+  lamp:     { file: 'Desk lamp.glb', pos: [-2.0, -0.822, 1.0],  fit: 'height', size: 0.92, rotY: 0 }
+};
+
+function fitAndPlace(root, cfg, pos) {
+  if (cfg.rotX) root.rotation.x = cfg.rotX;
+  if (cfg.rotY) root.rotation.y = cfg.rotY;
+  if (cfg.rotZ) root.rotation.z = cfg.rotZ;
+  root.updateMatrixWorld(true);
+  let box = new THREE.Box3().setFromObject(root);
+  let sz = box.getSize(new THREE.Vector3());
+  const native = cfg.fit === 'height' ? sz.y : cfg.fit === 'width' ? sz.x : cfg.fit === 'depth' ? sz.z : Math.max(sz.x, sz.y, sz.z);
+  root.scale.setScalar(cfg.size / (native || 1));
+  root.updateMatrixWorld(true);
+  box = new THREE.Box3().setFromObject(root);
+  const c = box.getCenter(new THREE.Vector3());
+  root.position.x += pos[0] - c.x;
+  root.position.z += pos[2] - c.z;
+  root.position.y += pos[1] - box.min.y;   // seat the base on the surface
+  root.traverse(o => {
+    if (o.isMesh) {
+      o.castShadow = true; o.receiveShadow = true;
+      if (o.material) o.material.envMapIntensity = 0.9;
+    }
+  });
+  scene.add(root);
+  return root;
+}
+
+function tagPush(root) {
+  root.userData.clickKind = 'push';
+  root.userData.home = { px: root.position.x, py: root.position.y, pz: root.position.z, rx: root.rotation.x, ry: root.rotation.y, rz: root.rotation.z };
+  return root;
+}
+function disableProc(objs) {
+  objs.forEach(o => { if (!o) return; o.visible = false; o.traverse(x => { x.raycast = function () {}; }); });
+}
+
+function loadModels() {
+  if (typeof THREE.GLTFLoader !== 'function') { console.warn('GLTFLoader missing — keeping procedural props'); return; }
+  const loader = new THREE.GLTFLoader();
+  const base = '3d models/';
+  const get = (cfg, cb) => loader.load(encodeURI(base + cfg.file), cb, undefined, (e) => console.warn('GLB failed:', cfg.file, e));
+
+  get(MODEL_CONFIG.keyboard, (g) => {
+    const m = fitAndPlace(g.scene, MODEL_CONFIG.keyboard, MODEL_CONFIG.keyboard.pos);
+    m.userData.clickKind = 'keyboard';
+    m.userData.home = { py: m.position.y };
+    disableProc([keysGroup, kbBase, kbDeckPlate, kbGlow, knob, knobTop]);
+  });
+  get(MODEL_CONFIG.mouse, (g) => {
+    tagPush(fitAndPlace(g.scene, MODEL_CONFIG.mouse, MODEL_CONFIG.mouse.pos));
+    disableProc([mouseGroup]);
+  });
+  get(MODEL_CONFIG.pc, (g) => {
+    tagPush(fitAndPlace(g.scene, MODEL_CONFIG.pc, MODEL_CONFIG.pc.pos));
+    disableProc([pcGroup, fan1, fan2, fan3, radFanA, radFanB]);
+    if (pcRigLight) pcRigLight.intensity = 1.4;
+  });
+  get(MODEL_CONFIG.speaker, (g) => {
+    const c = MODEL_CONFIG.speaker;
+    const right = g.scene.clone(true);
+    tagPush(fitAndPlace(g.scene, c, c.posL));
+    tagPush(fitAndPlace(right, c, c.posR));
+    disableProc([speakerL, speakerR]);
+  });
+  get(MODEL_CONFIG.lamp, (g) => {
+    tagPush(fitAndPlace(g.scene, MODEL_CONFIG.lamp, MODEL_CONFIG.lamp.pos));
+    disableProc([lampGroup]);
+  });
+}
+
 // Setup the entire Three.js scene
 function initThree() {
   initScreenCanvases();
@@ -912,7 +1135,8 @@ function initThree() {
 
   renderer = new THREE.WebGLRenderer({ canvas: filmCanvas, antialias: true, alpha: false });
   renderer.setSize(width, height, false);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  const lowPower = !!(window.matchMedia && window.matchMedia('(max-width: 768px)').matches);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, lowPower ? 1.4 : 2));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -922,15 +1146,15 @@ function initThree() {
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x140f0b);          // warm dark room
-  scene.fog = new THREE.FogExp2(0x140f0b, 0.045);
+  scene.fog = new THREE.FogExp2(0x120d09, 0.058);        // slightly denser → wall recedes
   scene.environment = buildEnvironment(renderer);        // image-based reflections
 
-  // Warm textured plaster wall behind the desk
+  // Warm textured plaster wall behind the desk (dimmed so focus stays on the monitors)
   const wallMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(46, 26),
-    new THREE.MeshBasicMaterial({ map: makeWallTexture() })
+    new THREE.MeshBasicMaterial({ map: makeWallTexture(), color: 0x565049 })
   );
-  wallMesh.position.set(-1.0, 2.4, -6.5);
+  wallMesh.position.set(-1.0, 2.4, -7.2);
   scene.add(wallMesh);
 
   camera = new THREE.PerspectiveCamera(42, width / height, 0.1, 100);
@@ -1052,27 +1276,27 @@ function initThree() {
   const kbCaseMat = new THREE.MeshPhysicalMaterial({ color: 0xdedde3, roughness: 0.5, metalness: 0.2, clearcoat: 0.3, clearcoatRoughness: 0.3, envMapIntensity: 0.8 });
   const kbDeckMat = new THREE.MeshPhysicalMaterial({ color: 0x202024, roughness: 0.55, metalness: 0.4, envMapIntensity: 0.6 });
 
-  const kbBase = new THREE.Mesh(new THREE.BoxGeometry(1.62, 0.06, 0.62), kbCaseMat);
+  kbBase = new THREE.Mesh(new THREE.BoxGeometry(1.62, 0.06, 0.62), kbCaseMat);
   kbBase.position.set(0, -0.808, 0.8);
   kbBase.receiveShadow = true; kbBase.castShadow = true;
   scene.add(kbBase);
-  const kbDeckPlate = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.02, 0.52), kbDeckMat);
+  kbDeckPlate = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.02, 0.52), kbDeckMat);
   kbDeckPlate.position.set(0, -0.778, 0.8);
   kbDeckPlate.receiveShadow = true;
   scene.add(kbDeckPlate);
 
   // RGB underglow strip (front edge) — cycles with the rig RGB
-  const kbGlow = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.012, 0.012), new THREE.MeshStandardMaterial({ color: 0x00b0ff, emissive: 0x00b0ff, emissiveIntensity: 1.6, roughness: 0.3 }));
+  kbGlow = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.012, 0.012), new THREE.MeshStandardMaterial({ color: 0x00b0ff, emissive: 0x00b0ff, emissiveIntensity: 1.6, roughness: 0.3 }));
   kbGlow.position.set(0, -0.83, 1.11);
   scene.add(kbGlow);
   fanRings.push(kbGlow.material.emissive);
 
   // volume knob (top-right, metallic)
-  const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.05, 24), new THREE.MeshPhysicalMaterial({ color: 0x3a3a40, roughness: 0.35, metalness: 0.9, clearcoat: 0.4, envMapIntensity: 1.0 }));
+  knob = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.05, 24), new THREE.MeshPhysicalMaterial({ color: 0x3a3a40, roughness: 0.35, metalness: 0.9, clearcoat: 0.4, envMapIntensity: 1.0 }));
   knob.position.set(0.74, -0.76, 0.62);
   knob.castShadow = true;
   scene.add(knob);
-  const knobTop = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.004, 24), new THREE.MeshStandardMaterial({ color: 0x111114, roughness: 0.5 }));
+  knobTop = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.004, 24), new THREE.MeshStandardMaterial({ color: 0x111114, roughness: 0.5 }));
   knobTop.position.set(0.74, -0.733, 0.62);
   scene.add(knobTop);
 
@@ -1089,7 +1313,7 @@ function initThree() {
       if (r === 4) {
         if (c === 5) {
           const sb = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.032, 0.058), keyMatWhite);
-          sb.position.set(7 * 0.09, 0, r * 0.08); sb.castShadow = true; keysGroup.add(sb);
+          sb.position.set(7 * 0.09, 0, r * 0.08); sb.castShadow = true; sb.userData.isSpace = true; keysGroup.add(sb);
         }
         if (c >= 5 && c <= 9) continue;
       }
@@ -1164,26 +1388,16 @@ function initThree() {
   speakerRings.push(spkRingR.material.emissive);
   scene.add(speakerR);
 
-  // Subtle RGB wash from each speaker
-  const spkLightL = new THREE.PointLight(0x00b0ff, 0.5, 1.1);
-  spkLightL.position.set(-1.0, -0.5, 0.45);
-  scene.add(spkLightL);
-  speakerRings.push(spkLightL.color);
+  // (speaker wash point lights removed for perf — emissive rings still cycle RGB)
 
-  const spkLightR = new THREE.PointLight(0x00b0ff, 0.5, 1.1);
-  spkLightR.position.set(1.0, -0.5, 0.45);
-  scene.add(spkLightR);
-  speakerRings.push(spkLightR.color);
-
-  // E. Articulated desk lamp (weighted base, jointed arms, conical shade)
+  // E. Articulated desk lamp — arm meets the shade cap, bulb inside the mouth, light straight down
   lampGroup = new THREE.Group();
-  lampGroup.position.set(-2.1, -0.825, 1.15); // front-left of desk, clear of the left monitor
+  lampGroup.position.set(-2.0, -0.825, 1.0);
 
   const lampMetal = new THREE.MeshPhysicalMaterial({ color: 0x26262b, roughness: 0.38, metalness: 0.85, clearcoat: 0.3, clearcoatRoughness: 0.25, envMapIntensity: 0.9 });
   const lampMatte = new THREE.MeshPhysicalMaterial({ color: 0x161618, roughness: 0.6, metalness: 0.4, clearcoat: 0.2, envMapIntensity: 0.5 });
   const jointMat  = new THREE.MeshPhysicalMaterial({ color: 0x0e0e10, roughness: 0.35, metalness: 0.9, envMapIntensity: 0.8 });
 
-  // weighted round base
   const baseDisc = new THREE.Mesh(new THREE.CylinderGeometry(0.135, 0.145, 0.028, 40), lampMetal);
   baseDisc.position.set(0, 0.014, 0); baseDisc.castShadow = true; baseDisc.receiveShadow = true; lampGroup.add(baseDisc);
   const baseRim = new THREE.Mesh(new THREE.TorusGeometry(0.135, 0.01, 12, 40), jointMat);
@@ -1191,15 +1405,14 @@ function initThree() {
   const baseDome = new THREE.Mesh(new THREE.SphereGeometry(0.05, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), lampMetal);
   baseDome.position.set(0, 0.028, 0); lampGroup.add(baseDome);
 
-  // joints + arms
+  // jointed arm reaching out over the notebook
   const j0 = new THREE.Vector3(0, 0.06, 0);
-  const j1 = new THREE.Vector3(0.0, 0.43, -0.03);   // elbow
-  const j2 = new THREE.Vector3(0.22, 0.70, 0.04);   // head joint
-  [j0, j1, j2].forEach(j => { const s = new THREE.Mesh(new THREE.SphereGeometry(0.028, 16, 12), jointMat); s.position.copy(j); lampGroup.add(s); });
+  const j1 = new THREE.Vector3(0.30, 0.46, 0.02);   // elbow
+  const j2 = new THREE.Vector3(0.72, 0.70, 0.05);   // head joint = top cap of the shade
+  [j0, j1, j2].forEach(j => { const s = new THREE.Mesh(new THREE.SphereGeometry(0.026, 16, 12), jointMat); s.position.copy(j); lampGroup.add(s); });
   lampGroup.add(cylinderBetween(j0, j1, 0.016, lampMetal));
   lampGroup.add(cylinderBetween(j1, j2, 0.014, lampMetal));
 
-  // spring coil hint along the lower arm
   for (let i = 0; i < 6; i++) {
     const p = new THREE.Vector3().lerpVectors(j0, j1, 0.15 + (i / 6) * 0.7);
     const coil = new THREE.Mesh(new THREE.TorusGeometry(0.022, 0.004, 8, 16), jointMat);
@@ -1207,38 +1420,30 @@ function initThree() {
     lampGroup.add(coil);
   }
 
-  // conical shade pointing down at the notebook
+  // conical shade — cap sits AT the joint, cone opens straight down
   const lampHead = new THREE.Group();
-  lampHead.position.set(0.24, 0.725, 0.05);
-  lampHead.rotation.z = -0.8;
-  const shadeOuter = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.13, 0.17, 28, 1, true), lampMatte);
-  shadeOuter.castShadow = true; lampHead.add(shadeOuter);
-  const shadeInner = new THREE.Mesh(new THREE.CylinderGeometry(0.046, 0.124, 0.165, 28, 1, true), new THREE.MeshStandardMaterial({ color: 0xfff0d6, roughness: 0.3, metalness: 0.6, side: THREE.BackSide, emissive: 0x553311, emissiveIntensity: 0.3 }));
-  lampHead.add(shadeInner);
-  const shadeCap = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.02, 28), lampMatte);
-  shadeCap.position.y = 0.085; lampHead.add(shadeCap);
+  lampHead.position.copy(j2);
+  lampHead.rotation.z = -0.1;
+  const shadeOuter = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.135, 0.16, 30, 1, true), lampMatte);
+  shadeOuter.position.y = -0.08; shadeOuter.castShadow = true; lampHead.add(shadeOuter);
+  const shadeInner = new THREE.Mesh(new THREE.CylinderGeometry(0.046, 0.129, 0.155, 30, 1, true), new THREE.MeshStandardMaterial({ color: 0xfff0d6, roughness: 0.3, metalness: 0.6, side: THREE.BackSide, emissive: 0x553311, emissiveIntensity: 0.4 }));
+  shadeInner.position.y = -0.08; lampHead.add(shadeInner);
+  const shadeCap = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.052, 0.022, 30), lampMatte);
+  shadeCap.position.y = 0.0; lampHead.add(shadeCap);
+  // warm bulb just inside the shade mouth
+  bulbGlow = new THREE.Mesh(new THREE.SphereGeometry(0.032, 16, 12), new THREE.MeshBasicMaterial({ color: 0xfff0cc }));
+  bulbGlow.position.set(0, -0.11, 0); lampHead.add(bulbGlow);
   lampGroup.add(lampHead);
 
   scene.add(lampGroup);
 
-  // SpotLight from the lamp head, pooling onto the notepad on the desk
-  deskLightBulb = new THREE.SpotLight(0xffd9ad, 16.0, 7, Math.PI / 6, 0.5, 1.4);
-  deskLightBulb.position.set(-1.86, -0.1, 1.2);
-  deskLightBulb.target.position.set(-1.25, -0.92, 1.2);
-  deskLightBulb.castShadow = true;
-  deskLightBulb.shadow.mapSize.width = 1024;
-  deskLightBulb.shadow.mapSize.height = 1024;
-  deskLightBulb.shadow.bias = -0.001;
+  // Spotlight from the bulb, straight down onto the notebook pool (no shadow → perf)
+  deskLightBulb = new THREE.SpotLight(0xffd9ad, 14.0, 6, Math.PI / 6, 0.5, 1.4);
+  deskLightBulb.position.set(-1.28, -0.235, 1.05);
+  deskLightBulb.target.position.set(-1.2, -0.95, 1.1);
+  deskLightBulb.castShadow = false;
   scene.add(deskLightBulb);
   scene.add(deskLightBulb.target);
-
-  // Warm bulb glow sphere at lamp head
-  bulbGlow = new THREE.Mesh(
-    new THREE.SphereGeometry(0.03, 12, 12),
-    new THREE.MeshBasicMaterial({ color: 0xffeebb })
-  );
-  bulbGlow.position.set(-1.86, -0.1, 1.2);
-  scene.add(bulbGlow);
 
   // E2. Open notebook on the desk under the lamp — left page = to-do, right page = blank/drawable
   const notebookGroup = new THREE.Group();
@@ -1419,14 +1624,10 @@ function initThree() {
 
   scene.add(pcGroup);
 
-  // Internal lighting — bright white core + RGB fills
-  pcRigLight = new THREE.PointLight(0xffffff, 3.5, 3.0);
+  // Internal lighting — single bright white core (emissive components carry the RGB)
+  pcRigLight = new THREE.PointLight(0xffffff, 3.2, 3.0);
   pcRigLight.position.set(1.7, -1.5, -0.1);
   scene.add(pcRigLight);
-  const pcRgbA = new THREE.PointLight(0x00b0ff, 2.0, 2.2);
-  pcRgbA.position.set(1.7, -1.2, 0.1); scene.add(pcRgbA);
-  const pcRgbB = new THREE.PointLight(0xff2d75, 1.4, 2.0);
-  pcRgbB.position.set(1.7, -1.85, 0.1); scene.add(pcRgbB);
 
 
   // Generic Rig Fan Builder (flat cylinders in XZ plane radiating outwards)
@@ -1490,9 +1691,9 @@ function initThree() {
   scene.add(fan3); addFanRing(fan3);
 
   // 2. Top radiator fans x2 — under the top panel, facing down
-  const radFanA = createRigFanCustom(0xffffff, 0xffffff, 0.45);
+  radFanA = createRigFanCustom(0xffffff, 0xffffff, 0.45);
   radFanA.position.set(1.72, -1.02, 0.12); scene.add(radFanA); addFanRing(radFanA);
-  const radFanB = createRigFanCustom(0xffffff, 0xffffff, 0.45);
+  radFanB = createRigFanCustom(0xffffff, 0xffffff, 0.45);
   radFanB.position.set(1.72, -1.02, -0.18); scene.add(radFanB); addFanRing(radFanB);
 
   // White glow spilling from the front fans
@@ -1541,11 +1742,18 @@ function initThree() {
   mugLiquid.position.set(0, -0.022, 0); // surface ≈ y 0.063, floor ≈ -0.107
   mugGroup.add(mugLiquid);
 
-  const mugHandle = new THREE.Mesh(new THREE.TorusGeometry(0.082, 0.022, 14, 28), ceramicMat);
-  mugHandle.position.set(-0.131, 0.0, 0);
-  mugHandle.rotation.z = 0.08;
+  // Handle sits fully OUTSIDE the wall (inner edge ≈ 0.118 ≥ 0.119 wall) — no interior clipping
+  const mugHandle = new THREE.Mesh(new THREE.TorusGeometry(0.072, 0.019, 14, 28), ceramicMat);
+  mugHandle.position.set(-0.19, 0.0, 0);
   mugHandle.castShadow = true;
   mugGroup.add(mugHandle);
+  // short stubs joining the handle to the outer wall so it reads as attached
+  [0.072, -0.072].forEach(yy => {
+    const stub = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.09, 12), ceramicMat);
+    stub.rotation.z = Math.PI / 2;
+    stub.position.set(-0.152, yy, 0);
+    mugGroup.add(stub);
+  });
 
   scene.add(mugGroup);
 
@@ -1577,6 +1785,7 @@ function initThree() {
   leftScreen.userData.monitor = { w: 1.54, h: 0.94 };
   centerScreen.userData.clickKind = 'monitor';
   centerScreen.userData.monitor = { w: 2.44, h: 1.39 };
+  centerScreen.userData.isCenter = true;
   rightScreen.userData.clickKind = 'monitor';
   rightScreen.userData.monitor = { w: 1.09, h: 1.99 };
 
@@ -1593,8 +1802,8 @@ function initThree() {
   keyLight.position.set(-2, 4.5, 3);
   keyLight.target = deskMesh;
   keyLight.castShadow = true;
-  keyLight.shadow.mapSize.width = 2048;
-  keyLight.shadow.mapSize.height = 2048;
+  keyLight.shadow.mapSize.width = lowPower ? 1024 : 2048;
+  keyLight.shadow.mapSize.height = lowPower ? 1024 : 2048;
   keyLight.shadow.bias = -0.0005;
   keyLight.shadow.normalBias = 0.02;
   keyLight.shadow.radius = 4;
@@ -1611,48 +1820,14 @@ function initThree() {
   rimLight.target = deskMesh;
   scene.add(rimLight);
 
-  // 5. Under-desk warm bounce fill
-  const bounceLight = new THREE.PointLight(0xff9944, 1.5, 5);
-  bounceLight.position.set(0, -2.2, 1);
-  scene.add(bounceLight);
+  // 5. (under-desk bounce fill removed for mobile perf)
 
-  // 6. Monitor screen light bleed — emissive glow planes behind each monitor
-  const screenGlowMat = new THREE.MeshBasicMaterial({ color: 0x1a2a40, transparent: true, opacity: 0.3 });
-  const leftGlow = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 1.5), screenGlowMat);
-  leftGlow.position.set(-1.8, 0.0, 0.15);
-  leftGlow.rotation.y = Math.PI / 6;
-  scene.add(leftGlow);
+  // 6. (Monitor glow planes removed — they rendered as hard-edged dark rectangles behind
+  //     the monitors. The emissive screens + IBL provide the bleed instead.)
 
-  const centerGlow = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 2.0), screenGlowMat);
-  centerGlow.position.set(0, 0.2, -0.25);
-  scene.add(centerGlow);
+  // 7. (monitor point lights removed for perf — emissive screens carry the glow)
 
-  const rightGlow = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 2.5), screenGlowMat);
-  rightGlow.position.set(1.9, 0.5, 0.05);
-  rightGlow.rotation.y = -Math.PI / 8;
-  scene.add(rightGlow);
-
-  // 7. Monitor screen point lights (subtle light cast onto desk from screens)
-  const monitorLightL = new THREE.PointLight(0x2244aa, 2.0, 4);
-  monitorLightL.position.set(-1.8, 0.0, 0.5);
-  scene.add(monitorLightL);
-
-  const monitorLightC = new THREE.PointLight(0x1a3355, 2.5, 5);
-  monitorLightC.position.set(0, 0.2, 0.3);
-  scene.add(monitorLightC);
-
-  const monitorLightR = new THREE.PointLight(0x224488, 1.5, 3.5);
-  monitorLightR.position.set(1.9, 0.5, 0.4);
-  scene.add(monitorLightR);
-
-  // 8. PC case RGB internal glow
-  const pcRgbBlue = new THREE.PointLight(0x00aaff, 4.0, 3);
-  pcRgbBlue.position.set(1.55, -1.5, -0.1);
-  scene.add(pcRgbBlue);
-
-  const pcRgbPurple = new THREE.PointLight(0x8844ff, 2.5, 2.5);
-  pcRgbPurple.position.set(1.95, -1.3, -0.3);
-  scene.add(pcRgbPurple);
+  // 8. (extra PC RGB point lights removed — pcRigLight + emissive components remain)
 
   // Shadows floor receiver plane
   const floorGeom = new THREE.PlaneGeometry(30, 30);
@@ -1734,6 +1909,7 @@ function animate() {
   // Real-time animated screen updates
   drawLeftScreen(scrollProgressPct);
   drawRightScreen(scrollProgressPct);
+  if (gameActive) drawGame();
 
 
 
@@ -2950,6 +3126,10 @@ filmCanvas.addEventListener('click', (e) => {
     const keyMesh = keyIntersects[0].object;
     const originalY = keyMesh.position.y;
     gsap.to(keyMesh.position, { y: originalY - 0.018, duration: 0.05, yoyo: true, repeat: 1, ease: 'power1.inOut' });
+    if (keyMesh.userData && keyMesh.userData.isSpace) {
+      if (gameActive) gameFlap();
+      else if (++spaceClicks >= 5) startGame();
+    }
     if (soundEnabled) playKeyboardClack();
     return;
   }
@@ -2962,8 +3142,19 @@ filmCanvas.addEventListener('click', (e) => {
       const kind = root.userData.clickKind;
       if (kind === 'mug') clickMug(root);
       else if (kind === 'lamp') clickLamp(root);
-      else if (kind === 'monitor') crackMonitor(root, hit.point);
+      else if (kind === 'monitor') {
+        if (gameActive && root.userData.isCenter) gameClickAt(hit.uv);
+        else crackMonitor(root, hit.point);
+      }
       else if (kind === 'notepad') { drawNotepadPencil(hit.uv); if (soundEnabled) playUIClick(); }
+      else if (kind === 'keyboard') {
+        gsap.killTweensOf(root.position);
+        const y0 = (root.userData.home && root.userData.home.py != null) ? root.userData.home.py : root.position.y;
+        gsap.to(root.position, { y: y0 - 0.012, duration: 0.06, yoyo: true, repeat: 1, ease: 'power1.inOut' });
+        if (soundEnabled) playKeyboardClack();
+        if (gameActive) gameFlap();
+        else if (++spaceClicks >= 5) startGame();
+      }
       else nudgePush(root);
       return;
     }
@@ -3020,6 +3211,7 @@ $$('.reveal-up').forEach(el => revealObserver.observe(el));
 document.addEventListener('mousemove', (e) => {
   const chapter = document.querySelector('.chapter-overlay.active');
   if (!chapter) return;
+  if (chapter.classList.contains('chapter-card')) return; // compact cards stay pinned top-right
   const cx = window.innerWidth  / 2;
   const cy = window.innerHeight / 2;
   const dx = (e.clientX - cx) / cx;
@@ -3078,6 +3270,7 @@ $$('.nav-link, .nav-cta, .contact-card, .filter-btn').forEach(el => {
 initThree();
 resizeCanvas();
 onScroll();
+loadModels();   // async: swaps procedural props for the real GLB models when they finish loading
 
 // First chapter always visible before scroll
 const firstChapter = $('chapterLanding');
@@ -3100,14 +3293,14 @@ console.log('%cScroll-driven cinematic portfolio — built with vanilla JS + Web
     let cur = null;
     const reset = el => { if (el) { el.style.removeProperty('--tilt-rx'); el.style.removeProperty('--tilt-ry'); el.classList.remove('weight-tilting'); } };
     document.addEventListener('mousemove', (e) => {
-      const el = e.target.closest(SEL);
+      const el = (e.target && e.target.closest) ? e.target.closest(SEL) : null;
       if (el !== cur) { reset(cur); cur = el; }
       if (!el) return;
       const r = el.getBoundingClientRect();
       const px = (e.clientX - r.left) / r.width - 0.5;
       const py = (e.clientY - r.top) / r.height - 0.5;
-      el.style.setProperty('--tilt-ry', (px * 9).toFixed(2) + 'deg');
-      el.style.setProperty('--tilt-rx', (-py * 9).toFixed(2) + 'deg');
+      el.style.setProperty('--tilt-ry', (px * 15).toFixed(2) + 'deg');
+      el.style.setProperty('--tilt-rx', (-py * 15).toFixed(2) + 'deg');
       el.classList.add('weight-tilting');
     }, { passive: true });
   }
@@ -3147,18 +3340,43 @@ console.log('%cScroll-driven cinematic portfolio — built with vanilla JS + Web
   // --- Press-X destruction (desktop) / double-tap (mobile) ---
   let active = false; const stored = [];
   const wrap = document.querySelector('.canvas-wrapper');
-  function destroy() {
-    if (active) return; active = true;
+  let lastPointer = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+  document.addEventListener('mousemove', (e) => { lastPointer.x = e.clientX; lastPointer.y = e.clientY; }, { passive: true });
+
+  function overCanvas(x, y) {
+    const el = document.elementFromPoint(x, y);
+    return !!(el && el.closest && el.closest('#canvasContainer, #webglCanvas, .canvas-wrapper'));
+  }
+  function spawnShock(x, y) {
+    const s = document.createElement('div');
+    s.className = 'chaos-shock';
+    s.style.left = x + 'px'; s.style.top = y + 'px';
+    document.body.appendChild(s);
+    setTimeout(() => s.remove(), 720);
+  }
+  function destroy(ox, oy) {
+    if (active) return;
+    if (overCanvas(ox, oy)) return;            // never blow up the 3D desk
+    active = true;
+    spawnShock(ox, oy);
     if (wrap) wrap.classList.add('chaos-shake');
-    document.querySelectorAll('.about-card, .project-card, .process-step, .contact-card, .request-card, .skill-orbit, .filter-bar, .proxi-inner').forEach(el => {
+    const RAD = Math.max(window.innerWidth, window.innerHeight) * 0.6;
+    document.querySelectorAll('.about-card, .project-card, .process-step, .contact-card, .request-card, .skill-orbit, .filter-bar, .proxi-inner, .work-header, .about-header').forEach(el => {
+      const r = el.getBoundingClientRect();
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      const dist = Math.hypot(cx - ox, cy - oy);
+      if (dist > RAD) return;                  // only what's near the blast reacts
+      const f = 1 - dist / RAD;
       stored.push({ el, t: el.style.transform, o: el.style.opacity, tr: el.style.transition });
       el.style.transition = 'transform 0.7s cubic-bezier(.2,.85,.25,1), opacity 0.7s';
-      const dx = (Math.random() - 0.5) * window.innerWidth * 0.55;
-      const dy = (Math.random() - 0.5) * window.innerHeight * 0.45;
-      el.style.transform = `translate(${dx.toFixed(0)}px, ${dy.toFixed(0)}px) rotate(${((Math.random() - 0.5) * 60).toFixed(0)}deg)`;
-      el.style.opacity = '0.82';
+      const ang = Math.atan2(cy - oy, cx - ox) + (Math.random() - 0.5) * 0.6;
+      const push = (120 + Math.random() * 280) * f;
+      el.style.transform = `translate(${(Math.cos(ang) * push).toFixed(0)}px, ${(Math.sin(ang) * push).toFixed(0)}px) rotate(${((Math.random() - 0.5) * 80 * f).toFixed(0)}deg)`;
+      el.style.opacity = (1 - 0.35 * f).toFixed(2);
     });
     document.querySelectorAll('h1, h2').forEach(h => {
+      const r = h.getBoundingClientRect();
+      if (Math.hypot(r.left + r.width / 2 - ox, r.top + r.height / 2 - oy) > RAD) return;
       if (h.dataset.shattered) return;
       h.dataset.shattered = '1';
       h.dataset.orig = h.innerHTML;
@@ -3187,10 +3405,16 @@ console.log('%cScroll-driven cinematic portfolio — built with vanilla JS + Web
     if (e.key !== 'x' && e.key !== 'X') return;
     const t = (document.activeElement && document.activeElement.tagName) || '';
     if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') return;
-    active ? restore() : destroy();
+    if (active) restore(); else destroy(lastPointer.x, lastPointer.y);
   });
   let lastTap = 0;
-  document.addEventListener('touchend', () => { const n = Date.now(); if (n - lastTap < 320) (active ? restore() : destroy()); lastTap = n; }, { passive: true });
+  document.addEventListener('touchend', (e) => {
+    const n = Date.now();
+    const tt = e.changedTouches && e.changedTouches[0];
+    const ox = tt ? tt.clientX : window.innerWidth / 2, oy = tt ? tt.clientY : window.innerHeight / 2;
+    if (n - lastTap < 320) { active ? restore() : destroy(ox, oy); }
+    lastTap = n;
+  }, { passive: true });
 
   const hint = document.createElement('div');
   hint.className = 'fun-hint';
@@ -3228,25 +3452,121 @@ console.log('%cScroll-driven cinematic portfolio — built with vanilla JS + Web
 })();
 
 /* ══════════════════════════════════
-   MOBILE: dismissible 3D scene HUD
+   FLOATING ISLAND — progress stroke + bottom finale
 ══════════════════════════════════ */
 (function () {
-  if (!window.matchMedia || !window.matchMedia('(max-width: 768px)').matches) return;
-  const btn = document.createElement('button');
-  btn.className = 'hud-toggle interactive';
-  btn.setAttribute('aria-label', 'Toggle scene overlay');
-  btn.innerHTML = '<span>Hide overlay</span>';
-  document.body.appendChild(btn);
-  btn.addEventListener('click', () => {
-    const hidden = document.body.classList.toggle('hud-hidden');
-    btn.querySelector('span').textContent = hidden ? 'Show overlay' : 'Hide overlay';
-  });
-  const hero = document.querySelector('.cinematic-hero');
-  if (hero && 'IntersectionObserver' in window) {
-    new IntersectionObserver((entries) => {
-      entries.forEach(e => btn.classList.toggle('visible', e.isIntersecting));
-    }, { threshold: 0.05 }).observe(hero);
-  } else {
-    btn.classList.add('visible');
+  const nav = document.getElementById('mainNav');
+  const svg = document.getElementById('islandProgress');
+  const rect = document.getElementById('islandProgressRect');
+  const finale = document.getElementById('islandFinale');
+  const brand = document.getElementById('navBrand');
+  if (!nav || !svg || !rect) return;
+  let complete = false;
+
+  function sizeStroke() {
+    const r = nav.getBoundingClientRect();
+    const W = Math.max(1, Math.round(r.width)), H = Math.max(1, Math.round(r.height));
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    rect.setAttribute('x', 2); rect.setAttribute('y', 2);
+    rect.setAttribute('width', W - 4); rect.setAttribute('height', H - 4);
+    rect.setAttribute('rx', (H - 4) / 2); rect.setAttribute('ry', (H - 4) / 2);
   }
+  sizeStroke();
+  window.addEventListener('resize', sizeStroke);
+
+  function scrollTop() {
+    if (typeof lenis !== 'undefined' && lenis) lenis.scrollTo(0, { duration: 1.6 });
+    else window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  if (brand) brand.addEventListener('click', (e) => { e.preventDefault(); scrollTop(); });
+
+  function onProg() {
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+    const pct = max > 0 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
+    rect.style.strokeDashoffset = (100 - pct * 100).toFixed(2);
+    const done = pct >= 0.995;
+    if (done !== complete) {
+      complete = done;
+      nav.classList.toggle('island-complete', done);
+      if (finale) finale.setAttribute('aria-hidden', String(!done));
+    }
+  }
+  window.addEventListener('scroll', onProg, { passive: true });
+  window.addEventListener('resize', onProg);
+  onProg();
+
+  nav.addEventListener('click', (e) => {
+    if (!nav.classList.contains('island-complete')) return;
+    e.preventDefault();
+    scrollTop();
+  });
+})();
+
+/* ══════════════════════════════════
+   ALIVE-NESS: word anims · gyro tilt · SFX
+══════════════════════════════════ */
+function playHover() {
+  if (!audioCtx) return;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = 'sine'; o.frequency.value = 1150 + Math.random() * 220;
+  g.gain.setValueAtTime(0.012, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.0004, audioCtx.currentTime + 0.07);
+  o.connect(g); g.connect(gainNode); o.start(); o.stop(audioCtx.currentTime + 0.08);
+}
+function playSoftClick() {
+  if (!audioCtx) return;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = 'triangle'; o.frequency.setValueAtTime(520, audioCtx.currentTime);
+  o.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime + 0.09);
+  g.gain.setValueAtTime(0.06, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.11);
+  o.connect(g); g.connect(gainNode); o.start(); o.stop(audioCtx.currentTime + 0.12);
+}
+
+(function () {
+  // Word animations: replay on tap + auto-play once when scrolled into view
+  const words = [...document.querySelectorAll('.fx-word')];
+  words.forEach(w => {
+    w.addEventListener('click', () => { w.classList.remove('fx-play'); void w.offsetWidth; w.classList.add('fx-play'); });
+    w.addEventListener('animationend', () => w.classList.remove('fx-play'));
+  });
+  if ('IntersectionObserver' in window) {
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          e.target.classList.add('fx-play');
+          setTimeout(() => e.target.classList.remove('fx-play'), 1000);
+          io.unobserve(e.target);
+        }
+      });
+    }, { threshold: 0.6 });
+    words.forEach(w => io.observe(w));
+  }
+
+  // Mobile: tilt panels with the accelerometer
+  if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
+    window.addEventListener('deviceorientation', (e) => {
+      if (e.gamma == null || e.beta == null) return;
+      const rx = Math.max(-8, Math.min(8, (e.beta - 45) * 0.18));
+      const ry = Math.max(-8, Math.min(8, e.gamma * 0.18));
+      document.documentElement.style.setProperty('--gyro-rx', (-rx).toFixed(2) + 'deg');
+      document.documentElement.style.setProperty('--gyro-ry', ry.toFixed(2) + 'deg');
+    }, true);
+  }
+
+  // SFX on every interaction (silent until the sound toggle is on)
+  const canSound = () => (typeof soundEnabled !== 'undefined') && soundEnabled && audioCtx;
+  const HOVER_SEL = 'a, button, .project-card, .orbit-node, .chip, .stat-item, .fx-word, .contact-card, .filter-btn, .choice-btn, .subchoice-btn, .role-card, .about-card, .metric';
+  const CLICK_SEL = '.orbit-node, .fx-word, .chip, .role-card, .island-links a, .island-cta, .island-brand, .stat-item, .metric';
+  let lastHover = 0;
+  document.addEventListener('pointerover', (e) => {
+    if (!canSound() || !e.target.closest) return;
+    if (!e.target.closest(HOVER_SEL)) return;
+    const now = Date.now(); if (now - lastHover < 55) return; lastHover = now;
+    playHover();
+  }, { passive: true });
+  document.addEventListener('click', (e) => {
+    if (!canSound() || !e.target.closest) return;
+    if (e.target.closest(CLICK_SEL)) playSoftClick();
+  }, true);
 })();
